@@ -1,4 +1,4 @@
-import type {VideoMessage} from '@/types/config';
+import type {VideoMessage} from '../types/config';
 import {getFileName, getVideoDuration} from './helpers';
 
 export function matchesVideo(

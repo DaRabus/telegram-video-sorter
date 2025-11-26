@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import {Api, TelegramClient} from 'telegram';
-import type {ForumGroupCache} from '@/types/config';
+import type {ForumGroupCache} from '../types/config';
 
 export class ForumService {
     private forumCache: ForumGroupCache = {topics: {}};

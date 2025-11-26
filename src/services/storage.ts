@@ -1,5 +1,5 @@
 import * as fs from 'node:fs';
-import type {ForwardingLogEntry} from '@/types/config';
+import type {ForwardingLogEntry} from '../types/config';
 
 export class MessageStorage {
     private processedMessages = new Set<string>();

@@ -1,4 +1,4 @@
-import type {VideoDocument} from '@/types/config';
+import {VideoDocument} from "../types/config";
 
 export function getVideoDuration(document: VideoDocument | undefined): number | null {
     if (!document?.attributes) {

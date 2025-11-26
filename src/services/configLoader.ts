@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {config as loadEnv} from 'dotenv';
-import type {DerivedPaths, SortingConfig} from '@/types/config';
+import type {DerivedPaths, SortingConfig} from '../types/config';
 
 export class ConfigLoader {
     private sortConfig!: SortingConfig;
