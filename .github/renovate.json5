@@ -1,0 +1,73 @@
+{
+  extends: [
+    "config:recommended",
+    "config:js-app",
+    "group:allNonMajor",
+    "workarounds:typesNodeVersioning",
+    "security:minimumReleaseAgeNpm",
+  ],
+  baseBranchPatterns: ["main"],
+  dependencyDashboard: true,
+  rebaseWhen: "conflicted",
+  updateNotScheduled: false,
+  branchConcurrentLimit: 5,
+  timezone: "Europe/Zurich",
+  schedule: [
+    "after 8pm every weekday",
+    "before 7am every weekday",
+    "every weekend",
+  ],
+  lockFileMaintenance: {
+    enabled: true,
+    automerge: false,
+  },
+  assignees: ["DaRabus"],
+  packageRules: [
+    {
+      matchUpdateTypes: ["minor", "patch"],
+      groupName: "all non-major dependencies",
+      automerge: true,
+    },
+    {
+      description: "Group lexical updates",
+      matchPackageNames: ["lexical", "@lexical/html", "@lexical/react"],
+      matchManagers: ["npm"],
+      groupName: "lexical packages",
+      groupSlug: "lexical-packages",
+    },
+    {
+      description: "Exclude npm because this should be in sync with latest node version",
+      enabled: false,
+      matchPackageNames: ["/^npm/"],
+    },
+    {
+      description: "Major Node LTS upgrade will be done manually",
+      matchUpdateTypes: ["major"],
+      matchDatasources: ["node-version"],
+      enabled: false,
+    },
+    {
+      description: "Automerge minor and patch node updates after 3 days",
+      matchUpdateTypes: ["minor", "patch"],
+      matchDatasources: ["node-version"],
+      minimumReleaseAge: "3 days",
+      automerge: false,
+    },
+    {
+      description: "Automerge minor and patch updates after 3 days",
+      matchUpdateTypes: ["minor", "patch"],
+      matchManagers: ["npm"],
+      matchDepTypes: ["devDependencies", "dependencies"],
+      minimumReleaseAge: "3 days",
+      automerge: false,
+    },
+    {
+      description: "Automerge major updates after 14 days",
+      matchUpdateTypes: ["major"],
+      matchManagers: ["npm"],
+      matchDepTypes: ["devDependencies", "dependencies"],
+      minimumReleaseAge: "14 days",
+      automerge: false,
+    },
+  ],
+}

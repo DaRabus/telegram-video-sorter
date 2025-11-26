@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  telegram-sorter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telegram-video-sorter
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Mount session directory
+      - ./session:/app/data:rw
+      # Mount config file
+      - ./telegram-sorter-config.json:/app/telegram-sorter-config.json:ro
+    environment:
+      # Override paths for Docker environment
+      - NODE_ENV=production
+    # Optional: Set resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    # Optional: Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,0 +1,245 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version_increment:
+        description: 'How many versions to increase from the last one. e.g. 2, with BUILD would be from 0.0.1.1 to 0.0.1.3'
+        required: false
+        default: '1'
+      version_base:
+        description: 'Which version part to increment. Resets build version to 0 on MAJOR, MINOR, or PATCH.'
+        required: false
+        default: 'BUILD'
+        type: choice
+        options:
+          - MAJOR
+          - MINOR
+          - PATCH
+          - BUILD
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Get Latest Release
+        id: get_latest_release
+        run: |
+          LATEST_RELEASE=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' || echo "release-v-0.0.0.0-0")
+          echo "LATEST_RELEASE=$LATEST_RELEASE" >> $GITHUB_OUTPUT
+          echo "Latest release: $LATEST_RELEASE"
+          echo "Current timestamp: $(date +%s)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Determine New Version
+        id: version
+        run: |
+          LATEST_RELEASE="${{ steps.get_latest_release.outputs.LATEST_RELEASE }}"
+          CURRENT_TIMESTAMP=$(date +%s)
+          VERSION_INCREMENT=${{ github.event.inputs.version_increment || '1' }}
+          VERSION_BASE="${{ github.event.inputs.version_base || 'BUILD' }}"
+
+          # Extract timestamp and version parts
+          if [[ $LATEST_RELEASE =~ release-v-([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)-([0-9]+) ]]; then
+            MAJOR=${BASH_REMATCH[1]}
+            MINOR=${BASH_REMATCH[2]}
+            PATCH=${BASH_REMATCH[3]}
+            BUILD=${BASH_REMATCH[4]}
+
+            if [ "$VERSION_BASE" == "MAJOR" ]; then
+              MAJOR=$((MAJOR + VERSION_INCREMENT))
+              BUILD=0
+            elif [ "$VERSION_BASE" == "MINOR" ]; then
+              MINOR=$((MINOR + VERSION_INCREMENT))
+              BUILD=0
+            elif [ "$VERSION_BASE" == "PATCH" ]; then
+              PATCH=$((PATCH + VERSION_INCREMENT))
+              BUILD=0
+            elif [ "$VERSION_BASE" == "BUILD" ]; then
+              BUILD=$((BUILD + VERSION_INCREMENT))
+            fi
+            TIMESTAMP=$CURRENT_TIMESTAMP
+          else
+            MAJOR=0
+            MINOR=0
+            PATCH=1
+            BUILD=1
+            TIMESTAMP=$CURRENT_TIMESTAMP
+          fi
+
+          # Construct new version
+          NEW_VERSION="release-v-${MAJOR}.${MINOR}.${PATCH}.${BUILD}-${TIMESTAMP}"
+          echo "Auto-generated version: $NEW_VERSION"
+
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "Final version: $NEW_VERSION"
+      
+
+      - name: Create Release Archive
+        run: |
+          mkdir -p release
+          
+          # Copy source directory
+          cp -r src release/
+          
+          # Copy configuration files
+          cp package.json release/
+          cp .nvmrc release/
+          cp LICENSE release/
+          cp tsconfig.json release/
+          cp .env.example release/
+          cp README.md release/
+          
+          # Copy config example (rename from actual config if it exists)
+          if [ -f telegram-sorter-config.json ]; then
+            cp telegram-sorter-config.json release/telegram-sorter-config.json.example
+          fi
+          
+          # Create .gitignore for the release
+          cat > release/.gitignore << 'EOF'
+          node_modules/
+          dist/
+          .env
+          session/
+          data/
+          *.session
+          npm-debug.log*
+          .DS_Store
+          telegram-sorter-config.json
+          EOF
+          
+          # Create the ZIP file
+          cd release
+          zip -r ../telegram-video-sorter-${{ steps.version.outputs.NEW_VERSION }}.zip .
+          cd ..
+          
+          # Calculate checksum
+          sha256sum telegram-video-sorter-${{ steps.version.outputs.NEW_VERSION }}.zip > telegram-video-sorter-${{ steps.version.outputs.NEW_VERSION }}.zip.sha256
+
+      - name: Build Docker Image
+        run: |
+          docker build -t telegram-video-sorter:${{ steps.version.outputs.NEW_VERSION }} .
+          docker save telegram-video-sorter:${{ steps.version.outputs.NEW_VERSION }} | gzip > telegram-video-sorter-docker-${{ steps.version.outputs.NEW_VERSION }}.tar.gz
+          sha256sum telegram-video-sorter-docker-${{ steps.version.outputs.NEW_VERSION }}.tar.gz > telegram-video-sorter-docker-${{ steps.version.outputs.NEW_VERSION }}.tar.gz.sha256
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.NEW_VERSION }}
+          name: 'Telegram Video Sorter ${{ steps.version.outputs.NEW_VERSION }}'
+          body: |
+            ## 📦 Telegram Video Sorter ${{ steps.version.outputs.NEW_VERSION }}
+            
+            ### 📥 Download Options
+            
+            **Option 1: Source Code (Recommended)**
+            - Download `telegram-video-sorter-${{ steps.version.outputs.NEW_VERSION }}.zip`
+            - Requires Node.js (preferable with [nvm](https://github.com/nvm-sh/nvm) installed on your system
+            
+            **Option 2: Docker Image**
+            - Download `telegram-video-sorter-docker-${{ steps.version.outputs.NEW_VERSION }}.tar.gz`
+            - Load with: `docker load < telegram-video-sorter-docker-${{ steps.version.outputs.NEW_VERSION }}.tar.gz`
+            - No Node.js installation required
+            
+            ### 🚀 Quick Start
+            
+            #### Using Source Code
+            ```bash
+            # Extract the archive
+            unzip telegram-video-sorter-${{ steps.version.outputs.NEW_VERSION }}.zip
+            cd telegram-video-sorter-${{ steps.version.outputs.NEW_VERSION }}
+            
+            # Install dependencies
+            npm install
+            
+            
+            # Edit .env with your Telegram API credentials
+            # Edit telegram-sorter-config.json with your settings
+            
+            # Generate Telegram session
+            npm run generate-session
+            
+            # Run the sorter
+            npm run sort-videos
+            ```
+            
+            #### Using Docker
+            ```bash
+            # Load the image
+            gunzip -c telegram-video-sorter-docker-${{ steps.version.outputs.NEW_VERSION }}.tar.gz | docker load
+            
+            # Run with docker-compose (recommended)
+            docker-compose up -d
+            ```
+            
+            ### 📋 What's Included
+            
+            - ✅ Main sorter script (`telegram-video-sorter.ts`)
+            - ✅ Session generator (`generate-tg-session.ts`)
+            - ✅ Type definitions (`input.d.ts`)
+            - ✅ Configuration files (`package.json`, `tsconfig.json`, `.nvmrc`)
+            - ✅ Examples (`.env.example`, `telegram-sorter-config.json.example`)
+            - ✅ Documentation (`README.md`, `LICENSE`)
+            
+            ### 🔒 Verification
+            
+            Verify download integrity:
+            ```bash
+            # For source code
+            sha256sum -c telegram-video-sorter-${{ steps.version.outputs.NEW_VERSION }}.zip.sha256
+            
+            # For Docker image
+            sha256sum -c telegram-video-sorter-docker-${{ steps.version.outputs.NEW_VERSION }}.tar.gz.sha256
+            ```
+            
+            ### 📄 Requirements
+            
+            - Node.js 20.0.0 or higher (for source code installation)
+            - Docker (for Docker installation)
+            - Telegram API credentials from https://my.telegram.org/apps
+            
+            ### 📜 License
+            
+            This software is licensed under the **PolyForm Noncommercial License 1.0.0**.
+            - ✅ Free for non-commercial use
+            - 💼 Commercial use requires a license - contact [rabus.me](https://rabus.me)
+            
+            ---
+            
+            **Build Information:**
+            - Commit: `${{ github.sha }}`
+            - Trigger: ${{ github.event_name }}
+            - Node Version: $(cat .nvmrc)
+          files: |
+            telegram-video-sorter-${{ steps.version.outputs.NEW_VERSION }}.zip
+            telegram-video-sorter-${{ steps.version.outputs.NEW_VERSION }}.zip.sha256
+            telegram-video-sorter-docker-${{ steps.version.outputs.NEW_VERSION }}.tar.gz
+            telegram-video-sorter-docker-${{ steps.version.outputs.NEW_VERSION }}.tar.gz.sha256
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

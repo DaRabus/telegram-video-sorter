@@ -1,0 +1,18 @@
+{
+  "sortedGroupName": "sorted_videos",
+  "dataDir": "data",
+  "sessionFile": "data/telegram_session.session",
+  "videoMatches": [
+    "keyword1",
+    "keyword2",
+    "keyword3"
+  ],
+  "videoExclusions": [
+    "compilation",
+    "preview"
+  ],
+  "minVideoDurationInSeconds": 300,
+  "maxForwards": 500000,
+  "dryRun": false,
+  "sourceGroups": []
+}
