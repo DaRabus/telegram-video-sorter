@@ -93,6 +93,9 @@ Edit the configuration:
 # Install dependencies
 npm install
 
+# Build the project
+npm run build
+
 # Generate session (you'll need to enter your phone number and verification code)
 npm run generate-session
 ```
@@ -101,10 +104,10 @@ npm run generate-session
 
 ```bash
 # Build the image
-docker-compose build
+docker compose build
 
 # Generate session interactively
-docker-compose run --rm telegram-sorter npx ts-node generate-tg-session.ts
+docker compose run --rm telegram-sorter npm run generate-session
 ```
 
 This will create a session file (location defined in `telegram-sorter-config.json`) that the sorter uses to authenticate.
@@ -117,24 +120,27 @@ This will create a session file (location defined in `telegram-sorter-config.jso
 # Install dependencies (if not already done)
 npm install
 
+# Build the project
+npm run build
+
 # Run the sorter
 npm start
 
-# Or use ts-node directly
-npx ts-node telegram-video-sorter.ts
+# Or run directly with ts-node (for development)
+npm run debug-sort-videos
 ```
 
 ### Option 2: Docker Setup
 
 ```bash
 # Start the sorter (runs in background)
-docker-compose up -d
+docker compose up -d
 
 # View logs
-docker-compose logs -f
+docker compose logs -f
 
 # Stop the sorter
-docker-compose down
+docker compose down
 ```
 
 ## How It Works
@@ -161,14 +167,19 @@ All environment variables are for **secrets only** - configuration is in `telegr
 ## File Structure
 
 ```
-tg-message-sorter/
-├── telegram-video-sorter.ts    # Main sorter script
-├── generate-tg-session.ts      # Session generation script
+telegram-video-sorter/
+├── src/
+│   ├── types/                  # TypeScript interfaces
+│   ├── utils/                  # Utility functions
+│   ├── services/               # Business logic services
+│   ├── telegram-sorter.ts      # Main sorter script
+│   └── generate-session.ts     # Session generation script
+├── dist/                       # Compiled JavaScript files
 ├── telegram-sorter-config.json # Configuration file
 ├── package.json                # Node.js dependencies
 ├── tsconfig.json               # TypeScript configuration
 ├── Dockerfile                  # Docker image definition
-├── docker-compose.yml          # Docker Compose configuration
+├── docker compose.yml          # Docker Compose configuration
 ├── .env                        # Environment variables (create from .env.example)
 ├── .env.example                # Example environment file
 ├── session/                    # Session storage directory
