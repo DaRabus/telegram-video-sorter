@@ -1,18 +1,25 @@
 # Telegram Video Sorter
 
 [![Node.js CI](https://github.com/DaRabus/telegram-video-sorter/actions/workflows/ci.yml/badge.svg)](https://github.com/DaRabus/telegram-video-sorter/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-blue.svg)](https://polyformproject.org/licenses/noncommercial/1.0.0/)
+[![Docker](https://img.shields.io/badge/Docker-Supported-blue?logo=docker)](https://hub.docker.com/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue?logo=typescript)](https://www.typescriptlang.org/)
 
-An automated Telegram bot that scans your groups/channels for videos matching specific keywords and organizes them into a forum group with topic-based sorting.
+**Automate your Telegram video organization.**
+
+This tool scans your Telegram groups and channels for videos matching specific keywords and automatically organizes them into a dedicated forum group with topic-based sorting. It's perfect for archiving, content curation, and managing large collections of videos.
+
+**Key Keywords:** Telegram Bot, Video Sorter, Automation, GramJS, TypeScript, Docker, Content Curation, Forum Groups.
 
 ## Features
 
-- 🔍 Scans Telegram groups/channels for videos matching keywords
-- 📁 Automatically creates forum groups and topics for organization
-- 🚫 Filters out unwanted content using exclusion keywords
-- ⏱️ Configurable minimum video duration filtering
-- 🔄 Duplicate detection and removal
-- 📊 Detailed logging and statistics
-- 🐳 Docker support for easy deployment
+- 🔍 **Smart Scanning**: Scans Telegram groups/channels for videos matching your keywords
+- 📁 **Auto-Organization**: Automatically creates forum groups and topics for each category
+- 🚫 **Content Filtering**: Filters out unwanted content using exclusion keywords
+- ⏱️ **Duration Filtering**: Configurable minimum video duration to skip short clips
+- 🔄 **Duplicate Removal**: Intelligent duplicate detection and removal
+- 📊 **Statistics**: Detailed logging and statistics of processed videos
+- 🐳 **Docker Ready**: Easy deployment with Docker and Docker Compose
 
 ## Prerequisites
 
