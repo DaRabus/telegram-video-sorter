@@ -3,7 +3,7 @@ import {
     getFileName,
     getVideoDuration
 } from '../src/utils/helpers';
-import {shouldExcludeVideo, matchesVideo} from '../src/utils/videoMatching';
+import {shouldExcludeVideo, matchesVideo} from '../src/utils/video-matching';
 
 describe('Telegram Video Sorter', () => {
     describe('formatDuration', () => {
