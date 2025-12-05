@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: telegram-video-sorter
-    restart: unless-stopped
+    restart: no
     env_file:
       - .env
     volumes:
