@@ -91,7 +91,7 @@ describe('Telegram Video Sorter', () => {
                 id: 1
             };
             // @ts-ignore
-            expect(matchesVideo(message, matches, exclusions, minDuration)).toBe('keyword');
+            expect(matchesVideo(message, matches, exclusions, minDuration)).toEqual(['keyword']);
         });
 
         it('should return null if video is too short', () => {
@@ -109,7 +109,7 @@ describe('Telegram Video Sorter', () => {
                 id: 1
             };
             // @ts-ignore
-            expect(matchesVideo(message, matches, exclusions, minDuration)).toBeNull();
+            expect(matchesVideo(message, matches, exclusions, minDuration).length).toBe(0);
         });
 
         it('should return null if video matches exclusion', () => {
@@ -127,7 +127,7 @@ describe('Telegram Video Sorter', () => {
                 id: 1
             };
             // @ts-ignore
-            expect(matchesVideo(message, matches, exclusions, minDuration)).toBeNull();
+            expect(matchesVideo(message, matches, exclusions, minDuration).length).toBe(0);
         });
     });
 });

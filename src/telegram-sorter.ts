@@ -6,7 +6,7 @@ import {TelegramClientFactory} from './services/telegramClient';
 import {ForwardingLogger, MessageStorage} from './services/storage';
 import {ForumService} from './services/forumService';
 import {matchesVideo, shouldExcludeVideo} from './utils/videoMatching';
-import {formatDuration, getFileName, getVideoDuration, handleRateLimit, sleep} from './utils/helpers';
+import {formatDuration, getFileName, getFileSizeMB, getVideoDuration, handleRateLimit, normalizeFileName, sleep} from './utils/helpers';
 import path from "node:path";
 
 class TelegramVideoSorter {
@@ -41,9 +41,30 @@ class TelegramVideoSorter {
         console.log(
             `⏱️  Minimum video duration: ${sortConfig.minVideoDurationInSeconds}s (${formatDuration(sortConfig.minVideoDurationInSeconds)})`
         );
+        if (sortConfig.maxVideoDurationInSeconds) {
+            console.log(
+                `⏱️  Maximum video duration: ${sortConfig.maxVideoDurationInSeconds}s (${formatDuration(sortConfig.maxVideoDurationInSeconds)})`
+            );
+        }
+        if (sortConfig.minFileSizeMB) {
+            console.log(`📏 Minimum file size: ${sortConfig.minFileSizeMB} MB`);
+        }
+        if (sortConfig.maxFileSizeMB) {
+            console.log(`📏 Maximum file size: ${sortConfig.maxFileSizeMB} MB`);
+        }
         console.log(`🎯 Max forwards per run: ${sortConfig.maxForwards}`);
         console.log(`🔍 Searching for: ${matches.join(', ')}`);
         console.log(`🚫 Excluding: ${exclusions.join(', ')}`);
+        if (sortConfig.duplicateDetection?.checkDuration) {
+            console.log(
+                `🔄 Duplicate detection: Duration-based (tolerance: ${sortConfig.duplicateDetection.durationToleranceSeconds || 30}s)`
+            );
+        }
+        if (sortConfig.duplicateDetection?.checkFileSize) {
+            console.log(
+                `🔄 Duplicate detection: Size-based (tolerance: ${sortConfig.duplicateDetection.fileSizeTolerancePercent || 5}%)`
+            );
+        }
 
         await this.client.connect();
         console.log('✅ Connected to Telegram');
@@ -67,7 +88,9 @@ class TelegramVideoSorter {
             topicIds[matchString] = await this.forumService.getOrCreateTopic(forumGroupId, matchString);
         }
 
-        // Clean up forum group
+        // Clean up forum group (removes excluded videos and duplicates)
+        // Note: This runs BEFORE processing to clean existing duplicates
+        // New duplicates are prevented by the storage system during processing
         await this.cleanupForumGroup(forumGroupId, exclusions);
 
         // Process videos
@@ -104,6 +127,7 @@ class TelegramVideoSorter {
                         hash: 0 as any
                     })
                 );
+                console.log(`🔍 Fetching messages from group: ${groupId} (offset: ${offsetId})`);
 
                 const messages =
                     'messages' in result && Array.isArray(result.messages)
@@ -280,7 +304,7 @@ class TelegramVideoSorter {
                 new Api.messages.GetHistory({
                     peer: sourceId,
                     offsetId,
-                    limit: 100,
+                    limit: 500,
                     addOffset: 0,
                     maxId: 0,
                     minId: 0,
@@ -310,7 +334,7 @@ class TelegramVideoSorter {
 
                 processed++;
 
-                const matchedString =
+                const matchedStrings =
                     'media' in message
                         ? matchesVideo(
                             message as any,
@@ -318,9 +342,9 @@ class TelegramVideoSorter {
                             exclusions,
                             sortConfig.minVideoDurationInSeconds
                         )
-                        : null;
+                        : [];
 
-                if (matchedString && 'media' in message) {
+                if (matchedStrings.length > 0 && 'media' in message) {
                     if (forwarded >= sortConfig.maxForwards) {
                         console.log(
                             `\n⚠️  Reached maximum forwards limit (${sortConfig.maxForwards}), stopping...`
@@ -332,50 +356,105 @@ class TelegramVideoSorter {
                     const document = (message as any).media?.document;
                     const duration = getVideoDuration(document);
                     const fileName = getFileName(document);
-                    const size = Number.parseInt(document?.size ?? '0', 10);
+                    const sizeMB = getFileSizeMB(document);
+                    const normalizedName = sortConfig.duplicateDetection?.normalizeFilenames !== false
+                        ? normalizeFileName(fileName)
+                        : fileName.toLowerCase();
 
-                    if (this.storage.isVideoDuplicate(fileName)) {
-                        console.log(`  ⏭️  Found duplicate: "${fileName}" (already processed)`);
-                        await this.cleanDuplicatesInForumGroup(forumGroupId, fileName);
+                    // Check file size constraints
+                    if (sortConfig.minFileSizeMB && sizeMB < sortConfig.minFileSizeMB) {
+                        console.log(`  ⏭️  Skipping (too small): "${fileName}" (${sizeMB.toFixed(2)} MB < ${sortConfig.minFileSizeMB} MB)`);
+                        this.storage.saveProcessedMessage(messageId);
+                        continue;
+                    }
+                    if (sortConfig.maxFileSizeMB && sizeMB > sortConfig.maxFileSizeMB) {
+                        console.log(`  ⏭️  Skipping (too large): "${fileName}" (${sizeMB.toFixed(2)} MB > ${sortConfig.maxFileSizeMB} MB)`);
                         this.storage.saveProcessedMessage(messageId);
                         continue;
                     }
 
-                    console.log(`  ✨ Match found: "${matchedString}"`);
+                    // Check duration constraints
+                    if (sortConfig.maxVideoDurationInSeconds && duration && duration > sortConfig.maxVideoDurationInSeconds) {
+                        console.log(`  ⏭️  Skipping (too long): "${fileName}" (${formatDuration(duration)} > ${formatDuration(sortConfig.maxVideoDurationInSeconds)})`);
+                        this.storage.saveProcessedMessage(messageId);
+                        continue;
+                    }
+
+                    // Enhanced duplicate detection
+                    const similarVideo = this.storage.findSimilarVideo(
+                        fileName,
+                        normalizedName,
+                        duration || undefined,
+                        sizeMB,
+                        sortConfig.duplicateDetection
+                    );
+
+                    if (similarVideo) {
+                        console.log(`  ⏭️  Found similar video: "${fileName}"`);
+                        console.log(`     🔍 Matches: "${similarVideo.fileName}"`);
+                        if (duration && similarVideo.duration) {
+                            console.log(`     ⏱️  Durations: ${formatDuration(duration)} vs ${formatDuration(similarVideo.duration)}`);
+                        }
+                        if (similarVideo.sizeMB) {
+                            console.log(`     📏 Sizes: ${sizeMB.toFixed(2)} MB vs ${similarVideo.sizeMB.toFixed(2)} MB`);
+                        }
+                        this.storage.saveProcessedMessage(messageId);
+                        continue;
+                    }
+
+                    console.log(`  ✨ Matches found: ${matchedStrings.join(', ')}`);
                     console.log(`     📹 File: ${fileName}`);
                     console.log(
                         `     ⏱️  Duration: ${duration ? formatDuration(duration) : 'unknown'}`
                     );
-                    console.log(`     📏 Size: ${(size / 1024 / 1024).toFixed(2)} MB`);
+                    console.log(`     📏 Size: ${sizeMB.toFixed(2)} MB`);
 
-                    const targetTopicId = topicIds[matchedString];
-                    console.log(
-                        `     🎯 Target: Forum group ${forumGroupId}, Topic ${targetTopicId}`
-                    );
+                    // Forward to ALL matching topics in parallel
+                    if (!sortConfig.dryRun && forumGroupId) {
+                        const forwardPromises = matchedStrings.map(matchedString => {
+                            const targetTopicId = topicIds[matchedString];
+                            console.log(
+                                `     🎯 Target: Topic "${matchedString}" (ID: ${targetTopicId})`
+                            );
+                            return this.forwardMessage(
+                                sourceId,
+                                message.id,
+                                forumGroupId,
+                                targetTopicId,
+                                fileName,
+                                matchedString,
+                                duration ?? 0,
+                                sizeMB,
+                                false // Don't save metadata yet
+                            ).then(success => ({success, matchedString}));
+                        });
 
-                    if (!sortConfig.dryRun && forumGroupId && targetTopicId) {
-                        const success = await this.forwardMessage(
-                            sourceId,
-                            message.id,
-                            forumGroupId,
-                            targetTopicId,
-                            fileName,
-                            matchedString,
-                            duration ?? 0,
-                            size
-                        );
+                        // Wait for all forwards to complete
+                        const results = await Promise.all(forwardPromises);
+                        const allSucceeded = results.every(r => r.success);
 
-                        if (success) {
+                        // Update stats for successful forwards
+                        for (const {success, matchedString} of results) {
+                            if (success) {
+                                forwardStats[matchedString] = (forwardStats[matchedString] ?? 0) + 1;
+                            }
+                        }
+
+                        if (allSucceeded) {
                             forwarded++;
-                            forwardStats[matchedString] = (forwardStats[matchedString] ?? 0) + 1;
+                            // Only save video metadata once after all forwards succeed
+                            this.storage.saveProcessedVideoName(fileName, duration || undefined, sizeMB, normalizedName);
                         }
                     } else if (sortConfig.dryRun) {
-                        console.log(
-                            `     🔍 [DRY RUN] Would forward to forum group ${forumGroupId}, topic ${targetTopicId}`
-                        );
-                        forwardStats[matchedString] = (forwardStats[matchedString] ?? 0) + 1;
+                        for (const matchedString of matchedStrings) {
+                            const targetTopicId = topicIds[matchedString];
+                            console.log(
+                                `     🔍 [DRY RUN] Would forward to topic "${matchedString}" (ID: ${targetTopicId})`
+                            );
+                            forwardStats[matchedString] = (forwardStats[matchedString] ?? 0) + 1;
+                        }
                         forwarded++;
-                        this.storage.saveProcessedVideoName(fileName);
+                        this.storage.saveProcessedVideoName(fileName, duration || undefined, sizeMB, normalizedName);
                     }
 
                     this.storage.saveProcessedMessage(messageId);
@@ -404,24 +483,33 @@ class TelegramVideoSorter {
         fileName: string,
         matchedKeyword: string,
         duration: number,
-        size: number
+        sizeMB: number,
+        saveMetadata: boolean = true
     ): Promise<boolean> {
         let retryCount = 0;
         let success = false;
+        const sortConfig = this.config.getConfig();
+        const normalizedName = sortConfig.duplicateDetection?.normalizeFilenames !== false
+            ? normalizeFileName(fileName)
+            : fileName.toLowerCase();
 
         while (!success && retryCount <= 3) {
             try {
+                const channelPeer = new Api.PeerChannel({
+                    channelId: BigInt(Math.abs(forumGroupId)) as any
+                });
+
                 await this.client.invoke(
                     new Api.messages.ForwardMessages({
                         fromPeer: sourceId,
                         id: [messageId],
-                        toPeer: forumGroupId,
+                        toPeer: channelPeer,
                         topMsgId: targetTopicId,
                         randomId: [Math.floor(Math.random() * 1e16) as any]
                     })
                 );
 
-                console.log(`     ✅ Forwarded successfully`);
+                console.log(`     ✅ Forwarded to "${matchedKeyword}"`);
 
                 this.logger.logForwardedVideo({
                     timestamp: new Date().toISOString(),
@@ -430,10 +518,13 @@ class TelegramVideoSorter {
                     topicName: matchedKeyword,
                     sourceGroup: sourceId,
                     duration,
-                    sizeMB: Number((size / 1024 / 1024).toFixed(2))
+                    sizeMB: Number(sizeMB.toFixed(2))
                 });
 
-                this.storage.saveProcessedVideoName(fileName);
+                // Only save metadata if requested (to avoid duplicate saves)
+                if (saveMetadata) {
+                    this.storage.saveProcessedVideoName(fileName, duration, sizeMB, normalizedName);
+                }
                 success = true;
             } catch (error) {
                 const shouldRetry = await handleRateLimit(error, retryCount);

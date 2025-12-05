@@ -6,8 +6,18 @@ export interface SortingConfig {
     videoExclusions: string[];
     sourceGroups?: (string | number)[];
     minVideoDurationInSeconds: number;
+    maxVideoDurationInSeconds?: number;
+    minFileSizeMB?: number;
+    maxFileSizeMB?: number;
     maxForwards: number;
     dryRun: boolean;
+    duplicateDetection?: {
+        checkDuration?: boolean;
+        durationToleranceSeconds?: number;
+        checkFileSize?: boolean;
+        fileSizeTolerancePercent?: number;
+        normalizeFilenames?: boolean;
+    };
 }
 
 export interface DerivedPaths {

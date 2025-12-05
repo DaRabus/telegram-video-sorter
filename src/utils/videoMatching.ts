@@ -6,11 +6,11 @@ export function matchesVideo(
     matches: string[],
     exclusions: string[],
     minDuration: number
-): string | null {
+): string[] {
     const media = message.media;
 
     if (!media?.document || !media.video) {
-        return null;
+        return [];
     }
 
     const document = media.document;
@@ -19,24 +19,27 @@ export function matchesVideo(
     const duration = getVideoDuration(document);
 
     if (!duration || duration < minDuration) {
-        return null;
+        return [];
     }
 
     const combinedText = `${messageText} ${fileName}`;
 
+    // Check exclusions first
     for (const exclusion of exclusions) {
         if (combinedText.includes(exclusion.toLowerCase())) {
-            return null;
+            return [];
         }
     }
 
+    // Find ALL matching strings
+    const allMatches: string[] = [];
     for (const matchString of matches) {
         if (combinedText.includes(matchString.toLowerCase())) {
-            return matchString;
+            allMatches.push(matchString);
         }
     }
 
-    return null;
+    return allMatches;
 }
 
 export function shouldExcludeVideo(
