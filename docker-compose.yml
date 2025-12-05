@@ -11,7 +11,7 @@ services:
       - .env
     volumes:
       # Mount session directory
-      - ./session:/app/data:rw
+      - ./session:/app/session:rw
       # Mount config file
       - ./telegram-sorter-config.json:/app/telegram-sorter-config.json:ro
     environment:
