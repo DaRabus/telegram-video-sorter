@@ -17,6 +17,9 @@ RUN npm install
 COPY src ./src
 COPY tsconfig.json ./
 
+# Build TypeScript code
+RUN npm run build
+
 # Create data directory for persistence
 RUN mkdir -p /app/data
 
@@ -24,4 +27,4 @@ RUN mkdir -p /app/data
 ENV NODE_ENV=production
 
 # Run the sorter script
-CMD ["npm", "run", "sort-videos"]
+CMD ["npm", "start"]

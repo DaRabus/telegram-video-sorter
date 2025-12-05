@@ -137,7 +137,7 @@ npm start
 npm run debug-sort-videos
 ```
 
-### Option 2: Docker Setup
+### Option 2: Docker Setup (Building from Source)
 
 ```bash
 # Start the sorter (runs in background)
@@ -149,6 +149,52 @@ docker compose logs -f
 # Stop the sorter
 docker compose down
 ```
+
+### Option 3: Docker Setup (Using Pre-built Release)
+
+If you downloaded a pre-built Docker image from the releases:
+
+1. **Download the Docker image archive:**
+   ```bash
+   # Download telegram-video-sorter-docker-release-v-X.X.X.X-TIMESTAMP.tar.gz from GitHub releases
+   ```
+
+2. **Load the Docker image:**
+   ```bash
+   gunzip -c telegram-video-sorter-docker-release-v-X.X.X.X-TIMESTAMP.tar.gz | docker load
+   ```
+
+3. **Create your environment file:**
+   ```bash
+   # Create .env file with your credentials
+   cat > .env << 'EOF'
+   TELEGRAM_APP_ID=your_app_id_here
+   TELEGRAM_APP_API_HASH=your_api_hash_here
+   EOF
+   ```
+
+4. **Prepare the session file:**
+   ```bash
+   # Create session directory
+   mkdir -p session
+
+   # Copy your existing telegram_session.session file into the session/ folder
+   # OR generate a new session (see Step 4: Generate Telegram Session above)
+   ```
+
+5. **Ensure docker-compose.yml and telegram-sorter-config.json exist:**
+   ```bash
+   # Download docker-compose.yml and telegram-sorter-config.json.example from the repository
+   # Configure telegram-sorter-config.json according to your needs
+   ```
+
+6. **Start the container:**
+   ```bash
+   docker compose up -d
+
+   # View logs
+   docker logs --follow telegram-video-sorter
+   ```
 
 ## How It Works
 

@@ -120,7 +120,7 @@ class TelegramVideoSorter {
                     new Api.messages.GetHistory({
                         peer: groupId,
                         offsetId,
-                        limit: 100,
+                        limit: 500,
                         addOffset: 0,
                         maxId: 0,
                         minId: 0,
@@ -548,7 +548,7 @@ class TelegramVideoSorter {
                 new Api.messages.GetHistory({
                     peer: groupId,
                     offsetId: 0,
-                    limit: 100,
+                    limit: 500,
                     addOffset: 0,
                     maxId: 0,
                     minId: 0,
