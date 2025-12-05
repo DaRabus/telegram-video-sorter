@@ -94,13 +94,40 @@ class TelegramVideoSorter {
         const sourceGroups = sortConfig.sourceGroups ?? [];
         const useAllGroups = !sortConfig.sourceGroups || sortConfig.sourceGroups.length === 0;
 
+        // Always fetch all accessible dialogs first
+        const allDialogs = await this.getAccessibleDialogs();
+
         let dialogsToProcess;
         if (useAllGroups) {
-            dialogsToProcess = await this.getAccessibleDialogs();
+            dialogsToProcess = allDialogs;
             console.log(`\n🌐 Processing ALL accessible groups/channels...`);
         } else {
+            // Filter dialogs based on specified source IDs
             console.log(`\n📋 Processing ${sourceGroups.length} specified groups...`);
-            dialogsToProcess = sourceGroups.map((id: any) => ({entity: {id}}));
+
+            // Convert string IDs to numbers and create a Set for faster lookup
+            const specifiedIds = new Set(
+                sourceGroups.map((id: string | number) => {
+                    const numId = typeof id === 'string' ? parseInt(id, 10) : id;
+                    // Store absolute value for matching
+                    return Math.abs(numId);
+                })
+            );
+
+            dialogsToProcess = allDialogs.filter(dialog => {
+                const entityId = dialog.entity?.id;
+                if (!entityId) return false;
+
+                const absId = Math.abs(Number(entityId));
+                return specifiedIds.has(absId);
+            });
+
+            console.log(`  ✅ Found ${dialogsToProcess.length} matching groups/channels from your list`);
+
+            if (dialogsToProcess.length === 0) {
+                console.warn(`  ⚠️  WARNING: None of the specified source IDs were found in accessible dialogs!`);
+                console.warn(`      Make sure you have access to these groups/channels and the IDs are correct.`);
+            }
         }
 
         for (const dialog of dialogsToProcess) {
@@ -111,14 +138,20 @@ class TelegramVideoSorter {
                 break;
             }
 
-            const sourceId = useAllGroups ? dialog.entity?.id : dialog.entity.id;
-            if (!sourceId) continue;
+            const sourceEntity = dialog.entity;
+            const sourceId = sourceEntity?.id;
 
-            console.log(`\n📂 Processing source: ${sourceId}`);
+            if (!sourceEntity || !sourceId) {
+                console.warn(`  ⚠️  Skipping invalid source entity`);
+                continue;
+            }
+
+            const dialogTitle = dialog.title || 'Unknown';
+            console.log(`\n📂 Processing source: ${sourceId} (${sourceEntity.className || 'Unknown type'}) - "${dialogTitle}"`);
 
             try {
                 const result = await this.videoProcessor.processSource(
-                    sourceId,
+                    sourceEntity,
                     forumGroupId,
                     topicIds,
                     matches,
@@ -143,6 +176,47 @@ class TelegramVideoSorter {
         const dialogs = await this.client.getDialogs({limit: 500});
         const groups = dialogs.filter((dialog) => dialog.isGroup || dialog.isChannel);
         console.log(`📊 Found ${groups.length} accessible groups/channels`);
+        console.log("\n📝 Available groups/channels with IDs:");
+
+        const groupDetails = groups.map((dialog) => {
+            const groupName = dialog.title ?? 'Unknown';
+            const entity = dialog.entity;
+
+            // Extract the correct ID based on entity type
+            let groupId: string | undefined;
+            if (entity && 'id' in entity) {
+                const rawId = entity.id;
+                // For channels and megagroups, convert to negative ID format
+                if ('className' in entity &&
+                    (entity.className === 'Channel' || entity.className === 'Chat')) {
+                    // Convert BigInt to string if necessary
+                    const idValue = typeof rawId === 'bigint' ? Number(rawId) : rawId;
+                    // Telegram uses negative IDs for groups/channels in some contexts
+                    groupId = (-Math.abs(Number(idValue))).toString();
+                } else {
+                    groupId = rawId.toString();
+                }
+            }
+
+            const groupType = dialog.isGroup ? 'Group' : dialog.isChannel ? 'Channel' : 'Unknown Type';
+
+            // Enhanced logging for group/channel extracted details
+            console.log(`  📂 ${groupType} Name: "${groupName}", ID: ${groupId} (Entity: ${entity?.className || 'Unknown'})`);
+            if (!groupId) {
+                console.warn(`  ❌ Unable to extract a valid ID for "${groupName}". Verify the entity format.`);
+            }
+            return {name: groupName, id: groupId, type: groupType, entity: dialog.entity};
+        });
+
+        console.log("\n🌟 To use these groups for sortConfig.sourceGroups, add the following valid IDs:");
+        const validIds = groupDetails.filter(group => group.id).map(group => group.id);
+        if (validIds.length === 0) {
+            console.warn("⚠️ No valid group/channel IDs found to use for sortConfig.sourceGroups.");
+        } else {
+            console.log(validIds.join(', '));
+        }
+
+        // Return dialogs with entity objects for proper resolution
         return groups;
     }
 }
