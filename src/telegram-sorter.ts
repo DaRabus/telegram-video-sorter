@@ -6,7 +6,15 @@ import {TelegramClientFactory} from './services/telegramClient';
 import {ForwardingLogger, MessageStorage} from './services/storage';
 import {ForumService} from './services/forumService';
 import {matchesVideo, shouldExcludeVideo} from './utils/videoMatching';
-import {formatDuration, getFileName, getFileSizeMB, getVideoDuration, handleRateLimit, normalizeFileName, sleep} from './utils/helpers';
+import {
+    formatDuration,
+    getFileName,
+    getFileSizeMB,
+    getVideoDuration,
+    handleRateLimit,
+    normalizeFileName,
+    sleep
+} from './utils/helpers';
 import path from "node:path";
 
 class TelegramVideoSorter {
@@ -99,6 +107,9 @@ class TelegramVideoSorter {
         // Print summary
         this.printSummary(stats, sortConfig.dryRun);
 
+        // Close database connection
+        this.storage.close();
+
         await this.client.disconnect();
         console.log('👋 Disconnected from Telegram');
     }
@@ -113,7 +124,8 @@ class TelegramVideoSorter {
         try {
             let offsetId = 0;
             let hasMore = true;
-            const videosByFilename = new Map<string, number[]>();
+            // Track videos per topic: Map<topicId, Map<normalizedFileName, messageId[]>>
+            const videosByTopicAndFilename = new Map<number, Map<string, number[]>>();
 
             while (hasMore) {
                 const result = await this.client.invoke(
@@ -171,10 +183,18 @@ class TelegramVideoSorter {
                             continue;
                         }
 
-                        if (!videosByFilename.has(normalizedFileName)) {
-                            videosByFilename.set(normalizedFileName, []);
+                        // Get the topic ID for this message (forum topics use replyTo.replyToTopId)
+                        const topicId = (message as any).replyTo?.replyToTopId || 0; // 0 for general topic
+
+                        if (!videosByTopicAndFilename.has(topicId)) {
+                            videosByTopicAndFilename.set(topicId, new Map());
                         }
-                        videosByFilename.get(normalizedFileName)?.push(message.id);
+
+                        const topicVideos = videosByTopicAndFilename.get(topicId)!;
+                        if (!topicVideos.has(normalizedFileName)) {
+                            topicVideos.set(normalizedFileName, []);
+                        }
+                        topicVideos.get(normalizedFileName)?.push(message.id);
                     }
                 }
 
@@ -188,32 +208,34 @@ class TelegramVideoSorter {
                 await sleep(1500);
             }
 
-            // Clean up duplicates
-            for (const [fileName, messageIds] of videosByFilename.entries()) {
-                if (messageIds.length > 1) {
-                    const toDelete = messageIds.slice(1);
-                    console.log(
-                        `  🔄 Found ${messageIds.length} copies of "${fileName}", removing ${toDelete.length}...`
-                    );
+            // Clean up duplicates per topic
+            for (const [topicId, topicVideos] of videosByTopicAndFilename.entries()) {
+                for (const [fileName, messageIds] of topicVideos.entries()) {
+                    if (messageIds.length > 1) {
+                        const toDelete = messageIds.slice(1);
+                        console.log(
+                            `  🔄 Topic ${topicId}: Found ${messageIds.length} copies of "${fileName}", removing ${toDelete.length}...`
+                        );
 
-                    if (!sortConfig.dryRun) {
-                        try {
-                            await this.client.invoke(
-                                new Api.messages.DeleteMessages({
-                                    id: toDelete,
-                                    revoke: true
-                                })
-                            );
+                        if (!sortConfig.dryRun) {
+                            try {
+                                await this.client.invoke(
+                                    new Api.messages.DeleteMessages({
+                                        id: toDelete,
+                                        revoke: true
+                                    })
+                                );
+                                totalDuplicates += toDelete.length;
+                            } catch (error) {
+                                console.error(`  ❌ Error removing duplicates:`, error);
+                            }
+                        } else {
+                            console.log(`  🔍 [DRY RUN] Would remove ${toDelete.length} duplicates`);
                             totalDuplicates += toDelete.length;
-                        } catch (error) {
-                            console.error(`  ❌ Error removing duplicates:`, error);
                         }
-                    } else {
-                        console.log(`  🔍 [DRY RUN] Would remove ${toDelete.length} duplicates`);
-                        totalDuplicates += toDelete.length;
-                    }
 
-                    await sleep(1000);
+                        await sleep(1000);
+                    }
                 }
             }
 
@@ -380,28 +402,6 @@ class TelegramVideoSorter {
                         continue;
                     }
 
-                    // Enhanced duplicate detection
-                    const similarVideo = this.storage.findSimilarVideo(
-                        fileName,
-                        normalizedName,
-                        duration || undefined,
-                        sizeMB,
-                        sortConfig.duplicateDetection
-                    );
-
-                    if (similarVideo) {
-                        console.log(`  ⏭️  Found similar video: "${fileName}"`);
-                        console.log(`     🔍 Matches: "${similarVideo.fileName}"`);
-                        if (duration && similarVideo.duration) {
-                            console.log(`     ⏱️  Durations: ${formatDuration(duration)} vs ${formatDuration(similarVideo.duration)}`);
-                        }
-                        if (similarVideo.sizeMB) {
-                            console.log(`     📏 Sizes: ${sizeMB.toFixed(2)} MB vs ${similarVideo.sizeMB.toFixed(2)} MB`);
-                        }
-                        this.storage.saveProcessedMessage(messageId);
-                        continue;
-                    }
-
                     console.log(`  ✨ Matches found: ${matchedStrings.join(', ')}`);
                     console.log(`     📹 File: ${fileName}`);
                     console.log(
@@ -409,12 +409,44 @@ class TelegramVideoSorter {
                     );
                     console.log(`     📏 Size: ${sizeMB.toFixed(2)} MB`);
 
-                    // Forward to ALL matching topics in parallel
+                    // Check each topic individually for duplicates
+                    const topicsToForward: string[] = [];
+                    for (const matchedString of matchedStrings) {
+                        const similarVideo = this.storage.findSimilarVideoInTopic(
+                            fileName,
+                            normalizedName,
+                            matchedString,
+                            duration || undefined,
+                            sizeMB,
+                            sortConfig.duplicateDetection
+                        );
+
+                        if (similarVideo) {
+                            console.log(`     ⏭️  Already exists in topic "${matchedString}": "${similarVideo.fileName}"`);
+                            if (duration && similarVideo.duration) {
+                                console.log(`        ⏱️  Durations: ${formatDuration(duration)} vs ${formatDuration(similarVideo.duration)}`);
+                            }
+                            if (similarVideo.sizeMB) {
+                                console.log(`        📏 Sizes: ${sizeMB.toFixed(2)} MB vs ${similarVideo.sizeMB.toFixed(2)} MB`);
+                            }
+                        } else {
+                            topicsToForward.push(matchedString);
+                        }
+                    }
+
+                    // If no topics to forward to, skip this video
+                    if (topicsToForward.length === 0) {
+                        console.log(`     ⏭️  Video already exists in all matching topics, skipping`);
+                        this.storage.saveProcessedMessage(messageId);
+                        continue;
+                    }
+
+                    // Forward only to topics where video doesn't exist
                     if (!sortConfig.dryRun && forumGroupId) {
-                        const forwardPromises = matchedStrings.map(matchedString => {
+                        const forwardPromises = topicsToForward.map(matchedString => {
                             const targetTopicId = topicIds[matchedString];
                             console.log(
-                                `     🎯 Target: Topic "${matchedString}" (ID: ${targetTopicId})`
+                                `     🎯 Forwarding to topic "${matchedString}" (ID: ${targetTopicId})`
                             );
                             return this.forwardMessage(
                                 sourceId,
@@ -425,36 +457,36 @@ class TelegramVideoSorter {
                                 matchedString,
                                 duration ?? 0,
                                 sizeMB,
-                                false // Don't save metadata yet
+                                normalizedName
                             ).then(success => ({success, matchedString}));
                         });
 
                         // Wait for all forwards to complete
                         const results = await Promise.all(forwardPromises);
-                        const allSucceeded = results.every(r => r.success);
 
-                        // Update stats for successful forwards
+                        // Update stats and storage for successful forwards
+                        let anySuccess = false;
                         for (const {success, matchedString} of results) {
                             if (success) {
                                 forwardStats[matchedString] = (forwardStats[matchedString] ?? 0) + 1;
+                                anySuccess = true;
                             }
                         }
 
-                        if (allSucceeded) {
+                        if (anySuccess) {
                             forwarded++;
-                            // Only save video metadata once after all forwards succeed
-                            this.storage.saveProcessedVideoName(fileName, duration || undefined, sizeMB, normalizedName);
                         }
                     } else if (sortConfig.dryRun) {
-                        for (const matchedString of matchedStrings) {
+                        for (const matchedString of topicsToForward) {
                             const targetTopicId = topicIds[matchedString];
                             console.log(
                                 `     🔍 [DRY RUN] Would forward to topic "${matchedString}" (ID: ${targetTopicId})`
                             );
                             forwardStats[matchedString] = (forwardStats[matchedString] ?? 0) + 1;
+                            // Save in dry run mode too for tracking
+                            this.storage.saveProcessedVideoName(fileName, matchedString, duration || undefined, sizeMB, normalizedName);
                         }
                         forwarded++;
-                        this.storage.saveProcessedVideoName(fileName, duration || undefined, sizeMB, normalizedName);
                     }
 
                     this.storage.saveProcessedMessage(messageId);
@@ -481,17 +513,13 @@ class TelegramVideoSorter {
         forumGroupId: number,
         targetTopicId: number,
         fileName: string,
-        matchedKeyword: string,
+        topicName: string,
         duration: number,
         sizeMB: number,
-        saveMetadata: boolean = true
+        normalizedName: string
     ): Promise<boolean> {
         let retryCount = 0;
         let success = false;
-        const sortConfig = this.config.getConfig();
-        const normalizedName = sortConfig.duplicateDetection?.normalizeFilenames !== false
-            ? normalizeFileName(fileName)
-            : fileName.toLowerCase();
 
         while (!success && retryCount <= 3) {
             try {
@@ -509,22 +537,20 @@ class TelegramVideoSorter {
                     })
                 );
 
-                console.log(`     ✅ Forwarded to "${matchedKeyword}"`);
+                console.log(`     ✅ Forwarded to "${topicName}"`);
 
                 this.logger.logForwardedVideo({
                     timestamp: new Date().toISOString(),
                     fileName,
-                    matchedKeyword,
-                    topicName: matchedKeyword,
+                    matchedKeyword: topicName,
+                    topicName: topicName,
                     sourceGroup: sourceId,
                     duration,
                     sizeMB: Number(sizeMB.toFixed(2))
                 });
 
-                // Only save metadata if requested (to avoid duplicate saves)
-                if (saveMetadata) {
-                    this.storage.saveProcessedVideoName(fileName, duration, sizeMB, normalizedName);
-                }
+                // Save to database with topic information
+                this.storage.saveProcessedVideoName(fileName, topicName, duration, sizeMB, normalizedName);
                 success = true;
             } catch (error) {
                 const shouldRetry = await handleRateLimit(error, retryCount);
@@ -538,71 +564,6 @@ class TelegramVideoSorter {
         }
 
         return success;
-    }
-
-    private async cleanDuplicatesInForumGroup(groupId: number, fileName: string): Promise<void> {
-        console.log(`  🔍 Checking for duplicates of "${fileName}" in forum group...`);
-
-        try {
-            const result = await this.client.invoke(
-                new Api.messages.GetHistory({
-                    peer: groupId,
-                    offsetId: 0,
-                    limit: 500,
-                    addOffset: 0,
-                    maxId: 0,
-                    minId: 0,
-                    hash: 0 as any
-                })
-            );
-
-            const messages =
-                'messages' in result && Array.isArray(result.messages)
-                    ? result.messages
-                    : [];
-
-            const duplicates: number[] = [];
-            const normalizedFileName = fileName.toLowerCase();
-
-            for (const message of messages) {
-                if ('media' in message && message.media) {
-                    const document = (message as any).media?.document;
-                    const msgFileName = getFileName(document);
-
-                    if (msgFileName.toLowerCase() === normalizedFileName) {
-                        duplicates.push(message.id);
-                    }
-                }
-            }
-
-            if (duplicates.length > 1) {
-                const toDelete = duplicates.slice(1);
-                console.log(
-                    `  ⚠️  Found ${duplicates.length} copies of "${fileName}", removing ${toDelete.length}...`
-                );
-
-                const sortConfig = this.config.getConfig();
-                if (!sortConfig.dryRun) {
-                    try {
-                        await this.client.invoke(
-                            new Api.messages.DeleteMessages({
-                                id: toDelete,
-                                revoke: true
-                            })
-                        );
-                        console.log(`  ✅ Removed ${toDelete.length} duplicate(s) of "${fileName}"`);
-                    } catch (error) {
-                        console.error(`  ❌ Error removing duplicates:`, error);
-                    }
-                } else {
-                    console.log(`  🔍 [DRY RUN] Would remove ${toDelete.length} duplicate(s)`);
-                }
-            } else {
-                console.log(`  ✅ No duplicates found for "${fileName}"`);
-            }
-        } catch (error) {
-            console.error(`  ❌ Error checking for duplicates:`, error);
-        }
     }
 
     private async getAccessibleDialogs() {

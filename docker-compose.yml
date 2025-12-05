@@ -14,6 +14,8 @@ services:
       - ./session:/app/session:rw
       # Mount config file
       - ./telegram-sorter-config.json:/app/telegram-sorter-config.json:ro
+      # Mount data directory for SQLite database
+      - ./data:/app/data:rw
     environment:
       # Override paths for Docker environment
       - NODE_ENV=production
