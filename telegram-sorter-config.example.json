@@ -11,8 +11,18 @@
     "compilation",
     "preview"
   ],
-  "minVideoDurationInSeconds": 300,
-  "maxForwards": 500000,
+  "minVideoDurationInSeconds": 200,
+  "maxVideoDurationInSeconds": 360000,
+  "minFileSizeMB": 10,
+  "maxFileSizeMB": 2000,
+  "maxForwards": 5000,
   "dryRun": false,
-  "sourceGroups": []
+  "sourceGroups": [],
+  "duplicateDetection": {
+    "checkDuration": true,
+    "durationToleranceSeconds": 30,
+    "checkFileSize": true,
+    "fileSizeTolerancePercent": 5,
+    "normalizeFilenames": true
+  }
 }

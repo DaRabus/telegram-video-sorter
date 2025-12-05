@@ -31,17 +31,30 @@ export class ForumService {
     }
 
     async getOrCreateForumGroup(groupName: string): Promise<number> {
+        // Check cache first
         if (this.forumCache.groupId) {
-            console.log(`  📂 Using existing forum group: ${this.forumCache.groupId}`);
+            console.log(`  📂 Using cached forum group: ${this.forumCache.groupId}`);
             return this.forumCache.groupId;
         }
 
         if (this.dryRun) {
-            console.log(`  🔍 [DRY RUN] Would create forum group "sorted_all"`);
+            console.log(`  🔍 [DRY RUN] Would search/create forum group "${groupName}"`);
             return -1;
         }
 
-        console.log(`  ✨ Creating forum group "sorted_all"...`);
+        // Search for existing forum group by name
+        console.log(`  🔍 Searching for existing forum group "${groupName}"...`);
+        const existingGroupId = await this.findForumGroupByName(groupName);
+
+        if (existingGroupId) {
+            console.log(`  ✅ Found existing forum group "${groupName}" with ID: ${existingGroupId}`);
+            this.forumCache.groupId = existingGroupId;
+            this.saveCache();
+            return existingGroupId;
+        }
+
+        // Create new forum group if not found
+        console.log(`  ✨ Forum group "${groupName}" not found, creating new one...`);
 
         try {
             const result = await this.client.invoke(
@@ -69,7 +82,7 @@ export class ForumService {
             this.forumCache.groupId = groupId;
             this.saveCache();
 
-            console.log(`  ✅ Created forum group "sorted_all" with ID: ${groupId}`);
+            console.log(`  ✅ Created forum group "${groupName}" with ID: ${groupId}`);
             return groupId;
         } catch (error) {
             console.error(`  ❌ Error creating forum group:`, error);
@@ -77,20 +90,66 @@ export class ForumService {
         }
     }
 
+    private async findForumGroupByName(groupName: string): Promise<number | null> {
+        try {
+            console.log('     Fetching dialogs...');
+            const dialogs = await this.client.getDialogs({limit: 500});
+
+            const normalizedSearchName = groupName.toLowerCase().trim();
+
+            for (const dialog of dialogs) {
+                const entity = dialog.entity;
+
+                // Check if it's a channel/supergroup with forum enabled
+                if ('forum' in entity && entity.forum) {
+                    const title = 'title' in entity ? entity.title : '';
+                    const normalizedTitle = title.toLowerCase().trim();
+
+                    if (normalizedTitle === normalizedSearchName) {
+                        const id = 'id' in entity ? Number(entity.id) : null;
+                        if (id) {
+                            // Convert to the proper format (negative for channels/supergroups)
+                            return -Math.abs(id);
+                        }
+                    }
+                }
+            }
+
+            console.log(`     No existing forum group found with name "${groupName}"`);
+            return null;
+        } catch (error) {
+            console.error('     ⚠️  Error searching for forum group:', error);
+            return null;
+        }
+    }
+
     async getOrCreateTopic(groupId: number, matchString: string): Promise<number> {
+        // Check cache first
         if (this.forumCache.topics[matchString]) {
             console.log(
-                `  📂 Using existing topic for "${matchString}": ${this.forumCache.topics[matchString]}`
+                `  📂 Using cached topic for "${matchString}": ${this.forumCache.topics[matchString]}`
             );
             return this.forumCache.topics[matchString];
         }
 
         if (this.dryRun) {
-            console.log(`  🔍 [DRY RUN] Would create topic "${matchString}"`);
+            console.log(`  🔍 [DRY RUN] Would search/create topic "${matchString}"`);
             return -1;
         }
 
-        console.log(`  ✨ Creating topic "${matchString}"...`);
+        // Search for existing topic by name
+        console.log(`  🔍 Searching for existing topic "${matchString}"...`);
+        const existingTopicId = await this.findTopicByName(groupId, matchString);
+
+        if (existingTopicId) {
+            console.log(`  ✅ Found existing topic "${matchString}" with ID: ${existingTopicId}`);
+            this.forumCache.topics[matchString] = existingTopicId;
+            this.saveCache();
+            return existingTopicId;
+        }
+
+        // Create new topic if not found
+        console.log(`  ✨ Topic "${matchString}" not found, creating new one...`);
 
         try {
             const channelPeer = new Api.PeerChannel({
@@ -130,6 +189,43 @@ export class ForumService {
         } catch (error) {
             console.error(`  ❌ Error creating topic "${matchString}":`, error);
             throw error;
+        }
+    }
+
+    private async findTopicByName(groupId: number, topicName: string): Promise<number | null> {
+        try {
+            const channelPeer = new Api.PeerChannel({
+                channelId: BigInt(Math.abs(groupId)) as any
+            });
+
+            const result = await this.client.invoke(
+                new Api.channels.GetForumTopics({
+                    channel: channelPeer,
+                    offsetDate: 0,
+                    offsetId: 0,
+                    offsetTopic: 0,
+                    limit: 100
+                })
+            );
+
+            const normalizedSearchName = topicName.toLowerCase().trim();
+
+            if ('topics' in result && Array.isArray(result.topics)) {
+                for (const topic of result.topics) {
+                    if ('title' in topic) {
+                        const normalizedTitle = topic.title.toLowerCase().trim();
+                        if (normalizedTitle === normalizedSearchName && 'id' in topic) {
+                            return Number(topic.id);
+                        }
+                    }
+                }
+            }
+
+            console.log(`     No existing topic found with name "${topicName}"`);
+            return null;
+        } catch (error) {
+            console.error(`     ⚠️  Error searching for topic "${topicName}":`, error);
+            return null;
         }
     }
 }
