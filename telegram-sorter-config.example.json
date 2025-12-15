@@ -17,6 +17,7 @@
   "maxFileSizeMB": 2000,
   "maxForwards": 5000,
   "dryRun": false,
+  "skipCleanup": false,
   "sourceGroups": [],
   "duplicateDetection": {
     "checkDuration": true,

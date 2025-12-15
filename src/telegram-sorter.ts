@@ -64,8 +64,8 @@ class TelegramVideoSorter {
             topicIds[matchString] = await this.forumService.getOrCreateTopic(forumGroupId, matchString);
         }
 
-        // Clean up forum group
-        await this.forumCleaner.cleanupForumGroup(forumGroupId, exclusions);
+        // Clean up forum group (can be skipped with skipCleanup: true in config)
+        await this.forumCleaner.cleanupForumGroup(forumGroupId, exclusions, sortConfig.skipCleanup);
 
         // Process videos
         const stats = await this.processVideos(forumGroupId, topicIds, matches, exclusions, sortConfig);

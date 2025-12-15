@@ -11,6 +11,7 @@ export interface SortingConfig {
     maxFileSizeMB?: number;
     maxForwards: number;
     dryRun: boolean;
+    skipCleanup?: boolean;  // Skip forum cleanup phase for faster runs
     duplicateDetection?: {
         checkDuration?: boolean;
         durationToleranceSeconds?: number;

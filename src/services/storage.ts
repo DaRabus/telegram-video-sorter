@@ -20,6 +20,11 @@ export class MessageStorage {
     private readonly legacyVideoNamesFile: string;
     private readonly legacyMetadataFile: string;
 
+    // Prepared statement cache for performance
+    private stmtHasMessage!: Database.Statement;
+    private stmtSaveMessage!: Database.Statement;
+    private stmtSaveVideo!: Database.Statement;
+
     constructor(processedLogFile: string) {
         this.legacyLogFile = processedLogFile;
         this.legacyVideoNamesFile = processedLogFile.replace('.txt', '-videos.txt');
@@ -29,6 +34,16 @@ export class MessageStorage {
         // Initialize database
         this.db = new Database(this.dbPath);
         this.initializeDatabase();
+        this.prepareStatements();
+    }
+
+    private prepareStatements(): void {
+        // Pre-compile frequently used statements for ~10x faster execution
+        this.stmtHasMessage = this.db.prepare('SELECT 1 FROM processed_messages WHERE message_id = ? LIMIT 1');
+        this.stmtSaveMessage = this.db.prepare('INSERT OR IGNORE INTO processed_messages (message_id) VALUES (?)');
+        this.stmtSaveVideo = this.db.prepare(
+            'INSERT OR IGNORE INTO processed_videos (file_name, normalized_name, topic_name, duration, size_mb) VALUES (?, ?, ?, ?, ?)'
+        );
     }
 
     private initializeDatabase(): void {
@@ -142,21 +157,16 @@ export class MessageStorage {
     }
 
     saveProcessedMessage(messageId: string): void {
-        const stmt = this.db.prepare('INSERT OR IGNORE INTO processed_messages (message_id) VALUES (?)');
-        stmt.run(messageId);
+        this.stmtSaveMessage.run(messageId);
     }
 
     hasProcessedMessage(messageId: string): boolean {
-        const stmt = this.db.prepare('SELECT 1 FROM processed_messages WHERE message_id = ? LIMIT 1');
-        return stmt.get(messageId) !== undefined;
+        return this.stmtHasMessage.get(messageId) !== undefined;
     }
 
     saveProcessedVideoName(fileName: string, topicName: string, duration?: number, sizeMB?: number, normalizedName?: string): void {
         const normalized = normalizedName || fileName.toLowerCase();
-        const stmt = this.db.prepare(
-            'INSERT OR IGNORE INTO processed_videos (file_name, normalized_name, topic_name, duration, size_mb) VALUES (?, ?, ?, ?, ?)'
-        );
-        stmt.run(fileName, normalized, topicName, duration ?? null, sizeMB ?? null);
+        this.stmtSaveVideo.run(fileName, normalized, topicName, duration ?? null, sizeMB ?? null);
     }
 
     isVideoDuplicateInTopic(fileName: string, topicName: string): boolean {
@@ -186,37 +196,66 @@ export class MessageStorage {
             fileSizeTolerancePercent?: number;
         }
     ): VideoTopicMetadata | null {
-        // Quick check: exact normalized name match in this specific topic or global wildcard
-        const exactMatch = this.db.prepare(
-            'SELECT file_name, normalized_name, topic_name, duration, size_mb FROM processed_videos WHERE normalized_name = ? AND (topic_name = ? OR topic_name = \'*\') LIMIT 1'
-        ).get(normalizedName, topicName) as any;
+        const durationTolerance = options?.durationToleranceSeconds || 30;
+        const sizeTolerance = options?.fileSizeTolerancePercent || 5;
+        
+        // First, check for exact normalized name match
+        const exactMatches = this.db.prepare(
+            'SELECT file_name, normalized_name, topic_name, duration, size_mb FROM processed_videos WHERE normalized_name = ? AND (topic_name = ? OR topic_name = \'*\')'
+        ).all(normalizedName, topicName) as any[];
 
-        if (exactMatch) {
-            return {
-                fileName: exactMatch.file_name,
-                normalizedName: exactMatch.normalized_name,
-                topicName: exactMatch.topic_name,
-                duration: exactMatch.duration ?? undefined,
-                sizeMB: exactMatch.size_mb ?? undefined
-            };
+        for (const match of exactMatches) {
+            // If no advanced checks enabled, any exact name match is a duplicate
+            if (!options?.checkDuration && !options?.checkFileSize) {
+                return {
+                    fileName: match.file_name,
+                    normalizedName: match.normalized_name,
+                    topicName: match.topic_name,
+                    duration: match.duration ?? undefined,
+                    sizeMB: match.size_mb ?? undefined
+                };
+            }
+            
+            // With advanced checks, verify duration AND/OR size match
+            let isDuplicate = true;
+            
+            if (options?.checkDuration && duration && match.duration) {
+                const durationDiff = Math.abs(duration - match.duration);
+                if (durationDiff > durationTolerance) {
+                    isDuplicate = false;
+                }
+            }
+            
+            if (options?.checkFileSize && sizeMB && match.size_mb) {
+                const sizeDiff = Math.abs(sizeMB - match.size_mb);
+                const sizePercentDiff = (sizeDiff / Math.max(sizeMB, match.size_mb)) * 100;
+                if (sizePercentDiff > sizeTolerance) {
+                    isDuplicate = false;
+                }
+            }
+            
+            if (isDuplicate) {
+                return {
+                    fileName: match.file_name,
+                    normalizedName: match.normalized_name,
+                    topicName: match.topic_name,
+                    duration: match.duration ?? undefined,
+                    sizeMB: match.size_mb ?? undefined
+                };
+            }
         }
 
-        // If advanced checks are enabled, search for similar videos in this topic
-        if (options?.checkDuration || options?.checkFileSize) {
-            const durationTolerance = options.durationToleranceSeconds || 30;
-            const sizeTolerance = options.fileSizeTolerancePercent || 5;
-
+        // No exact name match found (or all were rejected by size/duration checks)
+        // If advanced checks are enabled, also search by duration+size without name match
+        if ((options?.checkDuration && duration) || (options?.checkFileSize && sizeMB)) {
             let query = 'SELECT file_name, normalized_name, topic_name, duration, size_mb FROM processed_videos WHERE (topic_name = ? OR topic_name = \'*\')';
             const params: any[] = [topicName];
 
-            if (options.checkDuration && duration) {
+            // Require BOTH duration AND size to match for non-name-based duplicates
+            if (options?.checkDuration && duration && options?.checkFileSize && sizeMB) {
                 query += ' AND duration IS NOT NULL AND ABS(duration - ?) <= ?';
-                params.push(duration, durationTolerance);
-            }
-
-            if (options.checkFileSize && sizeMB) {
-                query += ' AND size_mb IS NOT NULL AND (ABS(size_mb - ?) / size_mb * 100) <= ?';
-                params.push(sizeMB, sizeTolerance);
+                query += ' AND size_mb IS NOT NULL AND (ABS(size_mb - ?) / CASE WHEN size_mb > ? THEN size_mb ELSE ? END * 100) <= ?';
+                params.push(duration, durationTolerance, sizeMB, sizeMB, sizeMB, sizeTolerance);
             }
 
             query += ' LIMIT 1';

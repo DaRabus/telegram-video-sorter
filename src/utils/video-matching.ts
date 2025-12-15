@@ -9,11 +9,23 @@ export function matchesVideo(
 ): string[] {
     const media = message.media;
 
-    if (!media?.document || !media.video) {
+    // Check if document exists
+    if (!media?.document) {
         return [];
     }
 
     const document = media.document;
+    
+    // Check if it's a video by looking for DocumentAttributeVideo or video flag
+    const hasVideoAttribute = document.attributes?.some(
+        attr => attr.className === 'DocumentAttributeVideo'
+    );
+    const isVideo = media.video || hasVideoAttribute;
+    
+    if (!isVideo) {
+        return [];
+    }
+
     const messageText = (message.message ?? '').toLowerCase();
     const fileName = getFileName(document).toLowerCase();
     const duration = getVideoDuration(document);
@@ -26,15 +38,17 @@ export function matchesVideo(
 
     // Check exclusions first
     for (const exclusion of exclusions) {
-        if (combinedText.includes(exclusion.toLowerCase())) {
+        const exclusionLower = exclusion.toLowerCase().trim();
+        if (exclusionLower && combinedText.includes(exclusionLower)) {
             return [];
         }
     }
 
-    // Find ALL matching strings
+    // Find ALL matching strings (case-insensitive word matching)
     const allMatches: string[] = [];
     for (const matchString of matches) {
-        if (combinedText.includes(matchString.toLowerCase())) {
+        const matchLower = matchString.toLowerCase().trim();
+        if (matchLower && combinedText.includes(matchLower)) {
             allMatches.push(matchString);
         }
     }

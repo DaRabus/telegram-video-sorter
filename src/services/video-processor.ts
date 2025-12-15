@@ -55,7 +55,7 @@ export class VideoProcessor {
                 new Api.messages.GetHistory({
                     peer: sourceId,
                     offsetId,
-                    limit: 500,
+                    limit: 100,  // Telegram API limit
                     addOffset: 0,
                     maxId: 0,
                     minId: 0,
@@ -74,28 +74,29 @@ export class VideoProcessor {
             }
 
             batchCount++;
-            console.log(`  📦 Batch ${batchCount}: Processing ${messages.length} messages...`);
+            
+            // Quick filter: only process messages with media
+            const mediaMessages = messages.filter(m => 'media' in m && m.media);
+            console.log(`  📦 Batch ${batchCount}: ${messages.length} messages (${mediaMessages.length} with media)`);
 
-            for (const message of messages) {
+            for (const message of mediaMessages) {
                 const messageId = `${sourceId}_${message.id}`;
 
+                // Skip already processed - don't count these
                 if (this.storage.hasProcessedMessage(messageId)) {
                     continue;
                 }
 
+                const matchedStrings = matchesVideo(
+                    message as any,
+                    matches,
+                    exclusions,
+                    this.sortConfig.minVideoDurationInSeconds
+                );
+                
                 processed++;
 
-                const matchedStrings =
-                    'media' in message
-                        ? matchesVideo(
-                            message as any,
-                            matches,
-                            exclusions,
-                            this.sortConfig.minVideoDurationInSeconds
-                        )
-                        : [];
-
-                if (matchedStrings.length > 0 && 'media' in message) {
+                if (matchedStrings.length > 0) {
                     if (forwarded >= this.sortConfig.maxForwards) {
                         console.log(
                             `\n⚠️  Reached maximum forwards limit (${this.sortConfig.maxForwards}), stopping...`
@@ -150,7 +151,7 @@ export class VideoProcessor {
                 hasMore = false;
             }
 
-            await sleep(1500);
+            await sleep(500);
         }
 
         console.log(`  ✅ Finished processing source ${sourceId}`);

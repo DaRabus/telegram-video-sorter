@@ -30,11 +30,39 @@ export class ForumService {
         fs.writeFileSync(this.cacheFile, JSON.stringify(this.forumCache, null, 2));
     }
 
+    private async validateGroupExists(groupId: number): Promise<boolean> {
+        try {
+            const channelPeer = new Api.PeerChannel({
+                channelId: BigInt(Math.abs(groupId)) as any
+            });
+            
+            // Try to get channel info - if it fails, the group doesn't exist or isn't accessible
+            await this.client.invoke(
+                new Api.channels.GetFullChannel({
+                    channel: channelPeer
+                })
+            );
+            return true;
+        } catch (error) {
+            console.log(`     Group validation failed:`, (error as Error).message);
+            return false;
+        }
+    }
+
     async getOrCreateForumGroup(groupName: string): Promise<number> {
         // Check cache first
         if (this.forumCache.groupId) {
-            console.log(`  📂 Using cached forum group: ${this.forumCache.groupId}`);
-            return this.forumCache.groupId;
+            // Validate that cached group still exists and is accessible
+            const isValid = await this.validateGroupExists(this.forumCache.groupId);
+            if (isValid) {
+                console.log(`  📂 Using cached forum group: ${this.forumCache.groupId}`);
+                return this.forumCache.groupId;
+            } else {
+                console.log(`  ⚠️  Cached group ${this.forumCache.groupId} no longer accessible, searching again...`);
+                this.forumCache.groupId = undefined;
+                this.forumCache.topics = {};
+                this.saveCache();
+            }
         }
 
         if (this.dryRun) {
@@ -93,23 +121,36 @@ export class ForumService {
     private async findForumGroupByName(groupName: string): Promise<number | null> {
         try {
             console.log('     Fetching dialogs...');
+            // Fetch both regular and archived dialogs
             const dialogs = await this.client.getDialogs({limit: 500});
-
+            
             const normalizedSearchName = groupName.toLowerCase().trim();
+            console.log(`     Looking for forum group: "${normalizedSearchName}"`);
+            console.log(`     Found ${dialogs.length} dialogs to search...`);
 
             for (const dialog of dialogs) {
                 const entity = dialog.entity;
+                
+                if (!entity) continue;
 
+                // Get title for logging
+                const title = 'title' in entity ? (entity.title as string) : '';
+                const isForum = 'forum' in entity && entity.forum;
+                const isChannel = entity.className === 'Channel';
+                
                 // Check if it's a channel/supergroup with forum enabled
-                if ('forum' in entity && entity.forum) {
-                    const title = 'title' in entity ? entity.title : '';
+                if (isChannel && isForum) {
                     const normalizedTitle = title.toLowerCase().trim();
+                    
+                    console.log(`     Checking forum: "${title}" (normalized: "${normalizedTitle}")`);
 
                     if (normalizedTitle === normalizedSearchName) {
                         const id = 'id' in entity ? Number(entity.id) : null;
                         if (id) {
                             // Convert to the proper format (negative for channels/supergroups)
-                            return -Math.abs(id);
+                            const groupId = -Math.abs(id);
+                            console.log(`     ✅ Match found! ID: ${groupId}`);
+                            return groupId;
                         }
                     }
                 }
