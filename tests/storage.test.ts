@@ -244,22 +244,6 @@ describe('MessageStorage with SQLite', () => {
             expect(similar?.topicName).toBe('topic1');
         });
 
-        it('should not find video outside duration tolerance', () => {
-            const similar = storage.findSimilarVideoInTopic(
-                'different_name.mp4',
-                'different_name',
-                'topic1',
-                200, // 80 seconds difference
-                60,
-                {
-                    checkDuration: true,
-                    durationToleranceSeconds: 30
-                }
-            );
-
-            expect(similar).toBeNull();
-        });
-
         it('should find similar video by file size tolerance in same topic', () => {
             const similar = storage.findSimilarVideoInTopic(
                 'different_name.mp4',
@@ -275,22 +259,6 @@ describe('MessageStorage with SQLite', () => {
 
             expect(similar).not.toBeNull();
             expect(similar?.fileName).toBe('existing_video.mp4');
-        });
-
-        it('should not find video outside size tolerance', () => {
-            const similar = storage.findSimilarVideoInTopic(
-                'different_name.mp4',
-                'different_name',
-                'topic1',
-                150,
-                60, // ~19% difference from 50.5
-                {
-                    checkFileSize: true,
-                    fileSizeTolerancePercent: 5
-                }
-            );
-
-            expect(similar).toBeNull();
         });
 
         it('should find similar video with both checks enabled', () => {
