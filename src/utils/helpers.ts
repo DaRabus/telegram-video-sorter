@@ -25,14 +25,41 @@ export function getFileName(document: VideoDocument | undefined): string {
 }
 
 export function normalizeFileName(fileName: string): string {
-    return fileName
-        .toLowerCase()
-        .replace(/[\s_\-\.]+/g, '') // Remove spaces, underscores, hyphens, dots
-        .replace(/\[[^\]]*\]/g, '') // Remove content in brackets
-        .replace(/\([^)]*\)/g, '') // Remove content in parentheses
-        .replace(/\d{3,4}p/gi, '') // Remove resolution markers like 1080p, 720p
-        .replace(/x264|x265|hevc|h264|h265/gi, '') // Remove codec info
-        .trim();
+    // IMPROVED: More selective normalization that preserves key identifying information
+    let normalized = fileName.toLowerCase();
+    
+    // Remove file extension
+    normalized = normalized.replace(/\.(mp4|mkv|avi|mov|wmv|flv|webm)$/gi, '');
+    
+    // Remove common quality/resolution indicators (but keep unique parts of filename)
+    normalized = normalized.replace(/[\[\(]?\d{3,4}p[\]\)]?/gi, ''); // 1080p, 720p, [1080p]
+    normalized = normalized.replace(/[\[\(]?\d{1}k[\]\)]?/gi, ''); // 4k, 8k
+    normalized = normalized.replace(/[\[\(]?(uhd|fhd|hd|sd)[\]\)]?/gi, ''); // UHD, FHD
+    
+    // Remove codec and encoding info (in brackets or standalone)
+    normalized = normalized.replace(/[\[\(]?(x264|x265|hevc|h264|h265|avc|av1)[\]\)]?/gi, '');
+    normalized = normalized.replace(/[\[\(]?(aac|ac3|dts|mp3|flac)[\]\)]?/gi, '');
+    
+    // Remove common domain suffixes and metadata
+    normalized = normalized.replace(/\.(xxx|com|net|org)($|[\s\-_\.])/gi, '');
+    
+    // Remove release group brackets/parentheses but keep their content if meaningful
+    // This is more selective - only removes common tags
+    normalized = normalized.replace(/\[(rss|web-?dl|hdtv|bluray|brrip|webrip)\]/gi, '');
+    
+    // Normalize separators to single space for consistent comparison
+    normalized = normalized.replace(/[\s_\-\.]+/g, ' ');
+    
+    // Remove duplicate spaces
+    normalized = normalized.replace(/\s+/g, ' ').trim();
+    
+    // Final cleanup: remove special chars but keep letters, numbers, and spaces
+    normalized = normalized.replace(/[^a-z0-9\s]/g, '');
+    
+    // Final space cleanup
+    normalized = normalized.replace(/\s+/g, '').trim();
+    
+    return normalized;
 }
 
 export function getFileSize(document: VideoDocument | undefined): number {

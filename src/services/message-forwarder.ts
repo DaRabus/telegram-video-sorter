@@ -52,7 +52,8 @@ export class MessageForwarder {
                     sizeMB: Number(sizeMB.toFixed(2))
                 });
 
-                this.storage.saveProcessedVideoName(fileName, topicName, duration, sizeMB, normalizedName);
+                // Note: Video is already saved to storage before forwarding (in video-processor.ts)
+                // to prevent race conditions with duplicate detection
                 success = true;
             } catch (error) {
                 const shouldRetry = await handleRateLimit(error, retryCount);

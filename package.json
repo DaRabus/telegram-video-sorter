@@ -6,10 +6,13 @@
   "scripts": {
     "debug-sort-videos": "ts-node src/telegram-sorter.ts",
     "debug-generate-session": "ts-node src/generate-session.ts",
+    "debug-cleanup": "ts-node src/cleanup-duplicates.ts",
     "test": "jest",
     "build": "tsc",
     "start": "node dist/telegram-sorter.js",
-    "generate-session": "node dist/generate-session.js"
+    "generate-session": "node dist/generate-session.js",
+    "cleanup": "node dist/cleanup-duplicates.js",
+    "cleanup-delete": "node dist/cleanup-duplicates.js --delete"
   },
   "dependencies": {
     "@types/better-sqlite3": "7.6.13",

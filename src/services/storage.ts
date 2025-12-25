@@ -183,6 +183,235 @@ export class MessageStorage {
         return stmt.get(fileName.toLowerCase()) !== undefined;
     }
 
+    deleteVideosFromTopic(normalizedNames: string[], topicName: string): number {
+        if (normalizedNames.length === 0) return 0;
+        
+        const placeholders = normalizedNames.map(() => '?').join(',');
+        const stmt = this.db.prepare(
+            `DELETE FROM processed_videos WHERE normalized_name IN (${placeholders}) AND (topic_name = ? OR topic_name = '*')`
+        );
+        
+        const result = stmt.run(...normalizedNames, topicName);
+        
+        if (result.changes > 0) {
+            console.log(`     🗄️  Removed ${result.changes} video record(s) from database for topic "${topicName}"`);
+        }
+        
+        return result.changes;
+    }
+
+    private calculateSimilarity(str1: string, str2: string): number {
+        // IMPROVED: More sophisticated similarity check for better duplicate detection
+        if (str1 === str2) return 1.0;
+        
+        const longer = str1.length > str2.length ? str1 : str2;
+        const shorter = str1.length > str2.length ? str2 : str1;
+        
+        // If length difference is too large, unlikely to be the same video
+        const lengthRatio = shorter.length / longer.length;
+        if (lengthRatio < 0.7) return 0; // Less than 70% length match = different videos
+        
+        // If one string contains the other entirely (common with truncated names)
+        if (longer.includes(shorter)) {
+            return shorter.length / longer.length;
+        }
+        
+        // Check how many characters from the start match (prefix matching)
+        let prefixMatchingChars = 0;
+        const minLength = Math.min(str1.length, str2.length);
+        for (let i = 0; i < minLength; i++) {
+            if (str1[i] === str2[i]) {
+                prefixMatchingChars++;
+            } else {
+                break;
+            }
+        }
+        
+        const prefixScore = prefixMatchingChars / Math.max(str1.length, str2.length);
+        
+        // Also calculate character-level overlap (Jaccard similarity)
+        const set1 = new Set(str1.split(''));
+        const set2 = new Set(str2.split(''));
+        const intersection = new Set([...set1].filter(x => set2.has(x)));
+        const union = new Set([...set1, ...set2]);
+        const characterOverlap = intersection.size / union.size;
+        
+        // Combine both scores: prefix is more important (70%), character overlap (30%)
+        return (prefixScore * 0.7) + (characterOverlap * 0.3);
+    }
+
+    findAllSimilarVideosInTopic(
+        fileName: string,
+        normalizedName: string,
+        topicName: string,
+        duration?: number,
+        sizeMB?: number,
+        options?: {
+            checkDuration?: boolean;
+            durationToleranceSeconds?: number;
+            checkFileSize?: boolean;
+            fileSizeTolerancePercent?: number;
+        }
+    ): VideoTopicMetadata[] {
+        const durationTolerance = options?.durationToleranceSeconds || 30;
+        const sizeTolerance = options?.fileSizeTolerancePercent || 5;
+        const nameSimilarityThreshold = 0.85;
+        const results: VideoTopicMetadata[] = [];
+        
+        // First, check for exact normalized name matches
+        const exactMatches = this.db.prepare(
+            'SELECT file_name, normalized_name, topic_name, duration, size_mb FROM processed_videos WHERE normalized_name = ? AND (topic_name = ? OR topic_name = \'*\')'
+        ).all(normalizedName, topicName) as any[];
+
+        for (const match of exactMatches) {
+            // If no advanced checks enabled, any exact name match is a duplicate
+            if (!options?.checkDuration && !options?.checkFileSize) {
+                results.push({
+                    fileName: match.file_name,
+                    normalizedName: match.normalized_name,
+                    topicName: match.topic_name,
+                    duration: match.duration ?? undefined,
+                    sizeMB: match.size_mb ?? undefined
+                });
+                continue;
+            }
+            
+            // IMPROVED: With advanced checks, BOTH duration AND size must match if both are enabled
+            let isDuplicate = true;
+            let durationMatches = true;
+            let sizeMatches = true;
+            
+            // Check duration if enabled
+            if (options?.checkDuration) {
+                if (duration && match.duration) {
+                    const durationDiff = Math.abs(duration - match.duration);
+                    durationMatches = durationDiff <= durationTolerance;
+                } else {
+                    // If duration check is enabled but one video lacks duration, it's not a match
+                    durationMatches = false;
+                }
+            }
+            
+            // Check file size if enabled
+            if (options?.checkFileSize) {
+                if (sizeMB && match.size_mb) {
+                    const sizeDiff = Math.abs(sizeMB - match.size_mb);
+                    const sizePercentDiff = (sizeDiff / Math.max(sizeMB, match.size_mb)) * 100;
+                    sizeMatches = sizePercentDiff <= sizeTolerance;
+                } else {
+                    // If size check is enabled but one video lacks size, it's not a match
+                    sizeMatches = false;
+                }
+            }
+            
+            // CRITICAL: Both checks must pass when both are enabled
+            isDuplicate = durationMatches && sizeMatches;
+            
+            if (isDuplicate) {
+                results.push({
+                    fileName: match.file_name,
+                    normalizedName: match.normalized_name,
+                    topicName: match.topic_name,
+                    duration: match.duration ?? undefined,
+                    sizeMB: match.size_mb ?? undefined
+                });
+            }
+        }
+        
+        // NEW: Check for similar names (for truncated Telegram filenames)
+        if ((options?.checkDuration && duration) || (options?.checkFileSize && sizeMB)) {
+            const allInTopic = this.db.prepare(
+                'SELECT file_name, normalized_name, topic_name, duration, size_mb FROM processed_videos WHERE (topic_name = ? OR topic_name = \'*\')'
+            ).all(topicName) as any[];
+            
+            for (const candidate of allInTopic) {
+                // Skip if already in results
+                if (results.some(r => r.fileName === candidate.file_name && r.normalizedName === candidate.normalized_name)) {
+                    continue;
+                }
+                
+                const similarity = this.calculateSimilarity(normalizedName, candidate.normalized_name);
+                
+                if (similarity >= nameSimilarityThreshold) {
+                    let isDuplicate = true;
+                    
+                    if (options?.checkDuration && duration && candidate.duration) {
+                        const durationDiff = Math.abs(duration - candidate.duration);
+                        if (durationDiff > durationTolerance) {
+                            isDuplicate = false;
+                        }
+                    }
+                    
+                    if (options?.checkFileSize && sizeMB && candidate.size_mb) {
+                        const sizeDiff = Math.abs(sizeMB - candidate.size_mb);
+                        const sizePercentDiff = (sizeDiff / Math.max(sizeMB, candidate.size_mb)) * 100;
+                        if (sizePercentDiff > sizeTolerance) {
+                            isDuplicate = false;
+                        }
+                    }
+                    
+                    if (isDuplicate) {
+                        results.push({
+                            fileName: candidate.file_name,
+                            normalizedName: candidate.normalized_name,
+                            topicName: candidate.topic_name,
+                            duration: candidate.duration ?? undefined,
+                            sizeMB: candidate.size_mb ?? undefined
+                        });
+                    }
+                }
+            }
+            
+            // Fallback: Check by metadata match ONLY (for completely different filenames)
+            // This is for cases where only duration OR only size is being checked,
+            // or when both are checked but names are completely different
+            if (!results.length && ((options?.checkDuration && duration) || (options?.checkFileSize && sizeMB))) {
+                const allInTopic = this.db.prepare(
+                    'SELECT file_name, normalized_name, topic_name, duration, size_mb FROM processed_videos WHERE (topic_name = ? OR topic_name = \'*\')'
+                ).all(topicName) as any[];
+                
+                for (const candidate of allInTopic) {
+                    let isDuplicate = true;
+                    
+                    // Check duration if enabled and both videos have duration
+                    if (options?.checkDuration && duration && candidate.duration) {
+                        const durationDiff = Math.abs(duration - candidate.duration);
+                        if (durationDiff > durationTolerance) {
+                            isDuplicate = false;
+                        }
+                    } else if (options?.checkDuration && (!duration || !candidate.duration)) {
+                        // If duration check is enabled but one video lacks duration info, skip
+                        isDuplicate = false;
+                    }
+                    
+                    // Check size if enabled and both videos have size
+                    if (options?.checkFileSize && sizeMB && candidate.size_mb) {
+                        const sizeDiff = Math.abs(sizeMB - candidate.size_mb);
+                        const sizePercentDiff = (sizeDiff / Math.max(sizeMB, candidate.size_mb)) * 100;
+                        if (sizePercentDiff > sizeTolerance) {
+                            isDuplicate = false;
+                        }
+                    } else if (options?.checkFileSize && (!sizeMB || !candidate.size_mb)) {
+                        // If size check is enabled but one video lacks size info, skip
+                        isDuplicate = false;
+                    }
+                    
+                    if (isDuplicate) {
+                        results.push({
+                            fileName: candidate.file_name,
+                            normalizedName: candidate.normalized_name,
+                            topicName: candidate.topic_name,
+                            duration: candidate.duration ?? undefined,
+                            sizeMB: candidate.size_mb ?? undefined
+                        });
+                    }
+                }
+            }
+        }
+        
+        return results;
+    }
+
     findSimilarVideoInTopic(
         fileName: string,
         normalizedName: string,
@@ -196,84 +425,8 @@ export class MessageStorage {
             fileSizeTolerancePercent?: number;
         }
     ): VideoTopicMetadata | null {
-        const durationTolerance = options?.durationToleranceSeconds || 30;
-        const sizeTolerance = options?.fileSizeTolerancePercent || 5;
-        
-        // First, check for exact normalized name match
-        const exactMatches = this.db.prepare(
-            'SELECT file_name, normalized_name, topic_name, duration, size_mb FROM processed_videos WHERE normalized_name = ? AND (topic_name = ? OR topic_name = \'*\')'
-        ).all(normalizedName, topicName) as any[];
-
-        for (const match of exactMatches) {
-            // If no advanced checks enabled, any exact name match is a duplicate
-            if (!options?.checkDuration && !options?.checkFileSize) {
-                return {
-                    fileName: match.file_name,
-                    normalizedName: match.normalized_name,
-                    topicName: match.topic_name,
-                    duration: match.duration ?? undefined,
-                    sizeMB: match.size_mb ?? undefined
-                };
-            }
-            
-            // With advanced checks, verify duration AND/OR size match
-            let isDuplicate = true;
-            
-            if (options?.checkDuration && duration && match.duration) {
-                const durationDiff = Math.abs(duration - match.duration);
-                if (durationDiff > durationTolerance) {
-                    isDuplicate = false;
-                }
-            }
-            
-            if (options?.checkFileSize && sizeMB && match.size_mb) {
-                const sizeDiff = Math.abs(sizeMB - match.size_mb);
-                const sizePercentDiff = (sizeDiff / Math.max(sizeMB, match.size_mb)) * 100;
-                if (sizePercentDiff > sizeTolerance) {
-                    isDuplicate = false;
-                }
-            }
-            
-            if (isDuplicate) {
-                return {
-                    fileName: match.file_name,
-                    normalizedName: match.normalized_name,
-                    topicName: match.topic_name,
-                    duration: match.duration ?? undefined,
-                    sizeMB: match.size_mb ?? undefined
-                };
-            }
-        }
-
-        // No exact name match found (or all were rejected by size/duration checks)
-        // If advanced checks are enabled, also search by duration+size without name match
-        if ((options?.checkDuration && duration) || (options?.checkFileSize && sizeMB)) {
-            let query = 'SELECT file_name, normalized_name, topic_name, duration, size_mb FROM processed_videos WHERE (topic_name = ? OR topic_name = \'*\')';
-            const params: any[] = [topicName];
-
-            // Require BOTH duration AND size to match for non-name-based duplicates
-            if (options?.checkDuration && duration && options?.checkFileSize && sizeMB) {
-                query += ' AND duration IS NOT NULL AND ABS(duration - ?) <= ?';
-                query += ' AND size_mb IS NOT NULL AND (ABS(size_mb - ?) / CASE WHEN size_mb > ? THEN size_mb ELSE ? END * 100) <= ?';
-                params.push(duration, durationTolerance, sizeMB, sizeMB, sizeMB, sizeTolerance);
-            }
-
-            query += ' LIMIT 1';
-
-            const similarMatch = this.db.prepare(query).get(...params) as any;
-
-            if (similarMatch) {
-                return {
-                    fileName: similarMatch.file_name,
-                    normalizedName: similarMatch.normalized_name,
-                    topicName: similarMatch.topic_name,
-                    duration: similarMatch.duration ?? undefined,
-                    sizeMB: similarMatch.size_mb ?? undefined
-                };
-            }
-        }
-
-        return null;
+        const results = this.findAllSimilarVideosInTopic(fileName, normalizedName, topicName, duration, sizeMB, options);
+        return results.length > 0 ? results[0] : null;
     }
 
     // Legacy method - checks globally (kept for backward compatibility)

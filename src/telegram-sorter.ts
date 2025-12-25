@@ -130,6 +130,10 @@ class TelegramVideoSorter {
             }
         }
 
+        // Clear topic message cache before processing sources to get fresh data
+        this.videoProcessor.clearTopicCache();
+        console.log('🗑️  Cleared topic message cache\n');
+
         for (const dialog of dialogsToProcess) {
             if (totalForwarded >= sortConfig.maxForwards) {
                 console.log(
