@@ -24,6 +24,9 @@
     "durationToleranceSeconds": 30,
     "checkFileSize": true,
     "fileSizeTolerancePercent": 5,
-    "normalizeFilenames": true
+    "normalizeFilenames": true,
+    "checkResolution": false,
+    "resolutionTolerancePercent": 10,
+    "checkMimeType": false
   }
 }

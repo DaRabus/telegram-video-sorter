@@ -1,9 +1,12 @@
 import {
     formatDuration,
     getFileName,
-    getVideoDuration
+    getVideoDuration,
+    getVideoResolution,
+    getMimeType
 } from '../src/utils/helpers';
 import {shouldExcludeVideo, matchesVideo} from '../src/utils/video-matching';
+import type {VideoDocument} from '../src/types/config';
 
 describe('Telegram Video Sorter', () => {
     describe('formatDuration', () => {
@@ -33,8 +36,7 @@ describe('Telegram Video Sorter', () => {
                 attributes: [
                     {className: 'DocumentAttributeFilename', fileName: 'test.mp4'}
                 ]
-            };
-            // @ts-ignore
+            } as VideoDocument;
             expect(getFileName(doc)).toBe('test.mp4');
         });
 
@@ -43,8 +45,7 @@ describe('Telegram Video Sorter', () => {
                 attributes: [
                     {className: 'DocumentAttributeVideo', duration: 100}
                 ]
-            };
-            // @ts-ignore
+            } as VideoDocument;
             expect(getFileName(doc)).toBe('');
         });
     });
@@ -55,8 +56,7 @@ describe('Telegram Video Sorter', () => {
                 attributes: [
                     {className: 'DocumentAttributeVideo', duration: 120}
                 ]
-            };
-            // @ts-ignore
+            } as VideoDocument;
             expect(getVideoDuration(doc)).toBe(120);
         });
 
@@ -65,8 +65,7 @@ describe('Telegram Video Sorter', () => {
                 attributes: [
                     {className: 'DocumentAttributeFilename', fileName: 'test.mp4'}
                 ]
-            };
-            // @ts-ignore
+            } as VideoDocument;
             expect(getVideoDuration(doc)).toBeNull();
         });
     });
@@ -128,6 +127,55 @@ describe('Telegram Video Sorter', () => {
             };
             // @ts-ignore
             expect(matchesVideo(message, matches, exclusions, minDuration).length).toBe(0);
+        });
+    });
+
+    describe('getVideoResolution', () => {
+        it('should return resolution from document attributes', () => {
+            const doc = {
+                attributes: [
+                    {className: 'DocumentAttributeVideo', duration: 120, w: 1920, h: 1080}
+                ]
+            } as VideoDocument;
+            const resolution = getVideoResolution(doc);
+            expect(resolution).not.toBeNull();
+            expect(resolution?.width).toBe(1920);
+            expect(resolution?.height).toBe(1080);
+        });
+
+        it('should return null if no video attribute', () => {
+            const doc = {
+                attributes: [
+                    {className: 'DocumentAttributeFilename', fileName: 'test.mp4'}
+                ]
+            } as VideoDocument;
+            expect(getVideoResolution(doc)).toBeNull();
+        });
+
+        it('should return null if video attribute lacks resolution', () => {
+            const doc = {
+                attributes: [
+                    {className: 'DocumentAttributeVideo', duration: 120}
+                ]
+            } as VideoDocument;
+            expect(getVideoResolution(doc)).toBeNull();
+        });
+    });
+
+    describe('getMimeType', () => {
+        it('should return MIME type from document', () => {
+            const doc = {
+                mimeType: 'video/mp4',
+                attributes: []
+            } as VideoDocument;
+            expect(getMimeType(doc)).toBe('video/mp4');
+        });
+
+        it('should return null if no MIME type', () => {
+            const doc = {
+                attributes: []
+            } as VideoDocument;
+            expect(getMimeType(doc)).toBeNull();
         });
     });
 });

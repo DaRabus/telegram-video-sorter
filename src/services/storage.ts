@@ -7,6 +7,9 @@ interface VideoMetadata {
     normalizedName: string;
     duration?: number;
     sizeMB?: number;
+    width?: number;
+    height?: number;
+    mimeType?: string;
 }
 
 interface VideoTopicMetadata extends VideoMetadata {
@@ -42,7 +45,7 @@ export class MessageStorage {
         this.stmtHasMessage = this.db.prepare('SELECT 1 FROM processed_messages WHERE message_id = ? LIMIT 1');
         this.stmtSaveMessage = this.db.prepare('INSERT OR IGNORE INTO processed_messages (message_id) VALUES (?)');
         this.stmtSaveVideo = this.db.prepare(
-            'INSERT OR IGNORE INTO processed_videos (file_name, normalized_name, topic_name, duration, size_mb) VALUES (?, ?, ?, ?, ?)'
+            'INSERT OR IGNORE INTO processed_videos (file_name, normalized_name, topic_name, duration, size_mb, width, height, mime_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
         );
     }
 
@@ -63,6 +66,9 @@ export class MessageStorage {
                 topic_name      TEXT    NOT NULL,
                 duration        REAL,
                 size_mb         REAL,
+                width           INTEGER,
+                height          INTEGER,
+                mime_type       TEXT,
                 processed_at    INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
                 UNIQUE (normalized_name, topic_name)
             );
@@ -72,7 +78,41 @@ export class MessageStorage {
             CREATE INDEX IF NOT EXISTS idx_normalized_topic ON processed_videos (normalized_name, topic_name);
             CREATE INDEX IF NOT EXISTS idx_duration ON processed_videos (duration);
             CREATE INDEX IF NOT EXISTS idx_size_mb ON processed_videos (size_mb);
+            CREATE INDEX IF NOT EXISTS idx_resolution ON processed_videos (width, height);
+            CREATE INDEX IF NOT EXISTS idx_mime_type ON processed_videos (mime_type);
         `);
+        
+        // Add new columns to existing databases (migration)
+        this.migrateDatabase();
+    }
+    
+    private migrateDatabase(): void {
+        // Check if new columns exist, add them if not
+        const tableInfo = this.db.prepare("PRAGMA table_info(processed_videos)").all() as any[];
+        const columnNames = tableInfo.map(col => col.name);
+        
+        const migrations: string[] = [];
+        
+        if (!columnNames.includes('width')) {
+            migrations.push('ALTER TABLE processed_videos ADD COLUMN width INTEGER');
+        }
+        if (!columnNames.includes('height')) {
+            migrations.push('ALTER TABLE processed_videos ADD COLUMN height INTEGER');
+        }
+        if (!columnNames.includes('mime_type')) {
+            migrations.push('ALTER TABLE processed_videos ADD COLUMN mime_type TEXT');
+        }
+        
+        // Execute all migrations in a single transaction for atomicity
+        if (migrations.length > 0) {
+            const migrate = this.db.transaction(() => {
+                for (const migration of migrations) {
+                    this.db.exec(migration);
+                }
+            });
+            migrate();
+            console.log(`   ✅ Added ${migrations.length} new column(s) to database`);
+        }
     }
 
     loadProcessedMessages(): void {
@@ -135,12 +175,21 @@ export class MessageStorage {
 
         // Migrate legacy videos with "unknown" topic (since we don't have topic info in old format)
         const insert = this.db.prepare(
-            'INSERT OR IGNORE INTO processed_videos (file_name, normalized_name, topic_name, duration, size_mb) VALUES (?, ?, ?, ?, ?)'
+            'INSERT OR IGNORE INTO processed_videos (file_name, normalized_name, topic_name, duration, size_mb, width, height, mime_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
         );
         const insertMany = this.db.transaction((videos: VideoMetadata[]) => {
             for (const video of videos) {
                 // Use "*" as wildcard topic to indicate it's been processed globally (legacy behavior)
-                insert.run(video.fileName, video.normalizedName, '*', video.duration ?? null, video.sizeMB ?? null);
+                insert.run(
+                    video.fileName, 
+                    video.normalizedName, 
+                    '*', 
+                    video.duration ?? null, 
+                    video.sizeMB ?? null,
+                    video.width ?? null,
+                    video.height ?? null,
+                    video.mimeType ?? null
+                );
             }
         });
 
@@ -164,9 +213,18 @@ export class MessageStorage {
         return this.stmtHasMessage.get(messageId) !== undefined;
     }
 
-    saveProcessedVideoName(fileName: string, topicName: string, duration?: number, sizeMB?: number, normalizedName?: string): void {
+    saveProcessedVideoName(
+        fileName: string, 
+        topicName: string, 
+        duration?: number, 
+        sizeMB?: number, 
+        normalizedName?: string,
+        width?: number,
+        height?: number,
+        mimeType?: string
+    ): void {
         const normalized = normalizedName || fileName.toLowerCase();
-        this.stmtSaveVideo.run(fileName, normalized, topicName, duration ?? null, sizeMB ?? null);
+        this.stmtSaveVideo.run(fileName, normalized, topicName, duration ?? null, sizeMB ?? null, width ?? null, height ?? null, mimeType ?? null);
     }
 
     isVideoDuplicateInTopic(fileName: string, topicName: string): boolean {
@@ -251,35 +309,47 @@ export class MessageStorage {
             durationToleranceSeconds?: number;
             checkFileSize?: boolean;
             fileSizeTolerancePercent?: number;
-        }
+            checkResolution?: boolean;
+            resolutionTolerancePercent?: number;
+            checkMimeType?: boolean;
+        },
+        width?: number,
+        height?: number,
+        mimeType?: string
     ): VideoTopicMetadata[] {
         const durationTolerance = options?.durationToleranceSeconds || 30;
         const sizeTolerance = options?.fileSizeTolerancePercent || 5;
+        const resolutionTolerance = options?.resolutionTolerancePercent || 10;
         const nameSimilarityThreshold = 0.85;
         const results: VideoTopicMetadata[] = [];
         
         // First, check for exact normalized name matches
         const exactMatches = this.db.prepare(
-            'SELECT file_name, normalized_name, topic_name, duration, size_mb FROM processed_videos WHERE normalized_name = ? AND (topic_name = ? OR topic_name = \'*\')'
+            'SELECT file_name, normalized_name, topic_name, duration, size_mb, width, height, mime_type FROM processed_videos WHERE normalized_name = ? AND (topic_name = ? OR topic_name = \'*\')'
         ).all(normalizedName, topicName) as any[];
 
         for (const match of exactMatches) {
             // If no advanced checks enabled, any exact name match is a duplicate
-            if (!options?.checkDuration && !options?.checkFileSize) {
+            if (!options?.checkDuration && !options?.checkFileSize && !options?.checkResolution && !options?.checkMimeType) {
                 results.push({
                     fileName: match.file_name,
                     normalizedName: match.normalized_name,
                     topicName: match.topic_name,
                     duration: match.duration ?? undefined,
-                    sizeMB: match.size_mb ?? undefined
+                    sizeMB: match.size_mb ?? undefined,
+                    width: match.width ?? undefined,
+                    height: match.height ?? undefined,
+                    mimeType: match.mime_type ?? undefined
                 });
                 continue;
             }
             
-            // IMPROVED: With advanced checks, BOTH duration AND size must match if both are enabled
+            // IMPROVED: With advanced checks, ALL enabled checks must match
             let isDuplicate = true;
             let durationMatches = true;
             let sizeMatches = true;
+            let resolutionMatches = true;
+            let mimeTypeMatches = true;
             
             // Check duration if enabled
             if (options?.checkDuration) {
@@ -304,8 +374,32 @@ export class MessageStorage {
                 }
             }
             
-            // CRITICAL: Both checks must pass when both are enabled
-            isDuplicate = durationMatches && sizeMatches;
+            // Check resolution if enabled (comparing total pixel count)
+            if (options?.checkResolution) {
+                if (width && height && match.width && match.height) {
+                    const pixels1 = width * height;
+                    const pixels2 = match.width * match.height;
+                    const pixelDiff = Math.abs(pixels1 - pixels2);
+                    const pixelPercentDiff = (pixelDiff / Math.max(pixels1, pixels2)) * 100;
+                    resolutionMatches = pixelPercentDiff <= resolutionTolerance;
+                } else {
+                    // If resolution check is enabled but one video lacks resolution, it's not a match
+                    resolutionMatches = false;
+                }
+            }
+            
+            // Check MIME type if enabled (exact match)
+            if (options?.checkMimeType) {
+                if (mimeType && match.mime_type) {
+                    mimeTypeMatches = mimeType.toLowerCase() === match.mime_type.toLowerCase();
+                } else {
+                    // If MIME type check is enabled but one video lacks MIME type, it's not a match
+                    mimeTypeMatches = false;
+                }
+            }
+            
+            // CRITICAL: All enabled checks must pass
+            isDuplicate = durationMatches && sizeMatches && resolutionMatches && mimeTypeMatches;
             
             if (isDuplicate) {
                 results.push({
@@ -313,15 +407,18 @@ export class MessageStorage {
                     normalizedName: match.normalized_name,
                     topicName: match.topic_name,
                     duration: match.duration ?? undefined,
-                    sizeMB: match.size_mb ?? undefined
+                    sizeMB: match.size_mb ?? undefined,
+                    width: match.width ?? undefined,
+                    height: match.height ?? undefined,
+                    mimeType: match.mime_type ?? undefined
                 });
             }
         }
         
         // NEW: Check for similar names (for truncated Telegram filenames)
-        if ((options?.checkDuration && duration) || (options?.checkFileSize && sizeMB)) {
+        if ((options?.checkDuration && duration) || (options?.checkFileSize && sizeMB) || (options?.checkResolution && width && height) || (options?.checkMimeType && mimeType)) {
             const allInTopic = this.db.prepare(
-                'SELECT file_name, normalized_name, topic_name, duration, size_mb FROM processed_videos WHERE (topic_name = ? OR topic_name = \'*\')'
+                'SELECT file_name, normalized_name, topic_name, duration, size_mb, width, height, mime_type FROM processed_videos WHERE (topic_name = ? OR topic_name = \'*\')'
             ).all(topicName) as any[];
             
             for (const candidate of allInTopic) {
@@ -350,13 +447,32 @@ export class MessageStorage {
                         }
                     }
                     
+                    if (options?.checkResolution && width && height && candidate.width && candidate.height) {
+                        const pixels1 = width * height;
+                        const pixels2 = candidate.width * candidate.height;
+                        const pixelDiff = Math.abs(pixels1 - pixels2);
+                        const pixelPercentDiff = (pixelDiff / Math.max(pixels1, pixels2)) * 100;
+                        if (pixelPercentDiff > resolutionTolerance) {
+                            isDuplicate = false;
+                        }
+                    }
+                    
+                    if (options?.checkMimeType && mimeType && candidate.mime_type) {
+                        if (mimeType.toLowerCase() !== candidate.mime_type.toLowerCase()) {
+                            isDuplicate = false;
+                        }
+                    }
+                    
                     if (isDuplicate) {
                         results.push({
                             fileName: candidate.file_name,
                             normalizedName: candidate.normalized_name,
                             topicName: candidate.topic_name,
                             duration: candidate.duration ?? undefined,
-                            sizeMB: candidate.size_mb ?? undefined
+                            sizeMB: candidate.size_mb ?? undefined,
+                            width: candidate.width ?? undefined,
+                            height: candidate.height ?? undefined,
+                            mimeType: candidate.mime_type ?? undefined
                         });
                     }
                 }
@@ -365,9 +481,9 @@ export class MessageStorage {
             // Fallback: Check by metadata match ONLY (for completely different filenames)
             // This is for cases where only duration OR only size is being checked,
             // or when both are checked but names are completely different
-            if (!results.length && ((options?.checkDuration && duration) || (options?.checkFileSize && sizeMB))) {
+            if (!results.length && ((options?.checkDuration && duration) || (options?.checkFileSize && sizeMB) || (options?.checkResolution && width && height) || (options?.checkMimeType && mimeType))) {
                 const allInTopic = this.db.prepare(
-                    'SELECT file_name, normalized_name, topic_name, duration, size_mb FROM processed_videos WHERE (topic_name = ? OR topic_name = \'*\')'
+                    'SELECT file_name, normalized_name, topic_name, duration, size_mb, width, height, mime_type FROM processed_videos WHERE (topic_name = ? OR topic_name = \'*\')'
                 ).all(topicName) as any[];
                 
                 for (const candidate of allInTopic) {
@@ -396,13 +512,40 @@ export class MessageStorage {
                         isDuplicate = false;
                     }
                     
+                    // Check resolution if enabled and both videos have resolution
+                    if (options?.checkResolution && width && height && candidate.width && candidate.height) {
+                        const pixels1 = width * height;
+                        const pixels2 = candidate.width * candidate.height;
+                        const pixelDiff = Math.abs(pixels1 - pixels2);
+                        const pixelPercentDiff = (pixelDiff / Math.max(pixels1, pixels2)) * 100;
+                        if (pixelPercentDiff > resolutionTolerance) {
+                            isDuplicate = false;
+                        }
+                    } else if (options?.checkResolution && (!width || !height || !candidate.width || !candidate.height)) {
+                        // If resolution check is enabled but one video lacks resolution info, skip
+                        isDuplicate = false;
+                    }
+                    
+                    // Check MIME type if enabled and both videos have MIME type
+                    if (options?.checkMimeType && mimeType && candidate.mime_type) {
+                        if (mimeType.toLowerCase() !== candidate.mime_type.toLowerCase()) {
+                            isDuplicate = false;
+                        }
+                    } else if (options?.checkMimeType && (!mimeType || !candidate.mime_type)) {
+                        // If MIME type check is enabled but one video lacks MIME type info, skip
+                        isDuplicate = false;
+                    }
+                    
                     if (isDuplicate) {
                         results.push({
                             fileName: candidate.file_name,
                             normalizedName: candidate.normalized_name,
                             topicName: candidate.topic_name,
                             duration: candidate.duration ?? undefined,
-                            sizeMB: candidate.size_mb ?? undefined
+                            sizeMB: candidate.size_mb ?? undefined,
+                            width: candidate.width ?? undefined,
+                            height: candidate.height ?? undefined,
+                            mimeType: candidate.mime_type ?? undefined
                         });
                     }
                 }
@@ -423,9 +566,15 @@ export class MessageStorage {
             durationToleranceSeconds?: number;
             checkFileSize?: boolean;
             fileSizeTolerancePercent?: number;
-        }
+            checkResolution?: boolean;
+            resolutionTolerancePercent?: number;
+            checkMimeType?: boolean;
+        },
+        width?: number,
+        height?: number,
+        mimeType?: string
     ): VideoTopicMetadata | null {
-        const results = this.findAllSimilarVideosInTopic(fileName, normalizedName, topicName, duration, sizeMB, options);
+        const results = this.findAllSimilarVideosInTopic(fileName, normalizedName, topicName, duration, sizeMB, options, width, height, mimeType);
         return results.length > 0 ? results[0] : null;
     }
 
@@ -470,7 +619,7 @@ export class MessageStorage {
 
     getProcessedVideos(): VideoTopicMetadata[] {
         const rows = this.db.prepare(
-            'SELECT file_name, normalized_name, topic_name, duration, size_mb FROM processed_videos'
+            'SELECT file_name, normalized_name, topic_name, duration, size_mb, width, height, mime_type FROM processed_videos'
         ).all() as any[];
 
         return rows.map(row => ({
@@ -478,13 +627,16 @@ export class MessageStorage {
             normalizedName: row.normalized_name,
             topicName: row.topic_name,
             duration: row.duration ?? undefined,
-            sizeMB: row.size_mb ?? undefined
+            sizeMB: row.size_mb ?? undefined,
+            width: row.width ?? undefined,
+            height: row.height ?? undefined,
+            mimeType: row.mime_type ?? undefined
         }));
     }
 
     getProcessedVideosInTopic(topicName: string): VideoTopicMetadata[] {
         const rows = this.db.prepare(
-            'SELECT file_name, normalized_name, topic_name, duration, size_mb FROM processed_videos WHERE topic_name = ?'
+            'SELECT file_name, normalized_name, topic_name, duration, size_mb, width, height, mime_type FROM processed_videos WHERE topic_name = ?'
         ).all(topicName) as any[];
 
         return rows.map(row => ({
@@ -492,7 +644,10 @@ export class MessageStorage {
             normalizedName: row.normalized_name,
             topicName: row.topic_name,
             duration: row.duration ?? undefined,
-            sizeMB: row.size_mb ?? undefined
+            sizeMB: row.size_mb ?? undefined,
+            width: row.width ?? undefined,
+            height: row.height ?? undefined,
+            mimeType: row.mime_type ?? undefined
         }));
     }
 
