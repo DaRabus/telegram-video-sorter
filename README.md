@@ -20,7 +20,9 @@ This tool scans your Telegram groups and channels for videos matching specific k
 - 🔄 **Advanced Duplicate Detection**: 
   - Fuzzy filename matching (85% similarity threshold)
   - Normalized comparison (ignores quality markers, codecs, part numbers)
-  - Multi-criteria validation (filename + duration + file size)
+  - Multi-criteria validation (filename + duration + file size + resolution + MIME type)
+  - Video resolution comparison (configurable tolerance)
+  - MIME type validation (ensures same video format)
   - Automatic duplicate replacement (keeps newest version)
 - 🚀 **Rate Limit Optimization**: 
   - Intelligent caching reduces API calls by 90%+
@@ -121,6 +123,9 @@ Edit the configuration:
   - `checkFileSize`: Compare file size (default: true)
   - `fileSizeTolerancePercent`: File size match tolerance as percentage (default: 5)
   - `normalizeFilenames`: Use enhanced filename normalization (default: true)
+  - `checkResolution`: Compare video resolution (width x height) (default: false)
+  - `resolutionTolerancePercent`: Resolution match tolerance as percentage (default: 10)
+  - `checkMimeType`: Verify MIME type matches (e.g., video/mp4, video/x-matroska) (default: false)
 
 ### Step 4: Generate Telegram Session
 
@@ -358,12 +363,32 @@ Video - Long Title with Description Char.mp4    → Detected as duplicate
 
 **3. Multi-Criteria Validation**
 
-Videos must match:
+Videos must match based on enabled criteria:
 - Filename similarity ≥ 85%
-- Duration within ±30 seconds (configurable)
-- File size within ±5% (configurable)
+- Duration within ±30 seconds (configurable, if enabled)
+- File size within ±5% (configurable, if enabled)
+- Resolution within ±10% pixel count (configurable, if enabled)
+- MIME type exact match (if enabled)
 
-**4. Automatic Duplicate Replacement**
+All enabled checks must pass for a video to be considered a duplicate.
+
+**4. Resolution-Based Detection** (Optional)
+
+Compare video resolution to catch same videos in different qualities:
+```
+1920x1080 (Full HD) vs 1920x1088 → Within 10% tolerance → Duplicate
+1920x1080 (Full HD) vs 720x480 (SD) → Outside tolerance → Different videos
+```
+
+**5. MIME Type Validation** (Optional)
+
+Ensure videos have the same format:
+```
+video/mp4 vs video/mp4 → Same format → Can be duplicate
+video/mp4 vs video/x-matroska → Different formats → Likely different videos
+```
+
+**6. Automatic Duplicate Replacement**
 
 When forwarding a video:
 1. Checks for duplicates in each target topic

@@ -293,6 +293,175 @@ describe('MessageStorage with SQLite', () => {
             expect(similar).not.toBeNull();
             expect(similar?.topicName).toBe('*');
         });
+
+        it('should find similar video by resolution tolerance', () => {
+            // Save video with 1920x1080 resolution
+            storage.saveProcessedVideoName(
+                'hd_video.mp4', 
+                'topic1', 
+                120, 
+                50, 
+                'hd_video',
+                1920,
+                1080
+            );
+
+            // Check with slightly different resolution (1920x1080 = 2,073,600 pixels)
+            // 1920x1088 = 2,089,600 pixels, difference is ~0.77% (within 10% tolerance)
+            const similar = storage.findSimilarVideoInTopic(
+                'hd_video.mp4',
+                'hd_video',
+                'topic1',
+                120,
+                50,
+                {
+                    checkResolution: true,
+                    resolutionTolerancePercent: 10
+                },
+                1920,
+                1088
+            );
+
+            expect(similar).not.toBeNull();
+            expect(similar?.width).toBe(1920);
+            expect(similar?.height).toBe(1080);
+        });
+
+        it('should not match videos with different resolutions outside tolerance', () => {
+            // Save video with 1920x1080 resolution
+            storage.saveProcessedVideoName(
+                'hd_video.mp4', 
+                'topic1', 
+                120, 
+                50, 
+                'hd_video',
+                1920,
+                1080
+            );
+
+            // Check with very different resolution (720x480)
+            const similar = storage.findSimilarVideoInTopic(
+                'hd_video.mp4',
+                'hd_video',
+                'topic1',
+                120,
+                50,
+                {
+                    checkResolution: true,
+                    resolutionTolerancePercent: 10
+                },
+                720,
+                480
+            );
+
+            expect(similar).toBeNull();
+        });
+
+        it('should find similar video by MIME type match', () => {
+            // Save video with specific MIME type
+            storage.saveProcessedVideoName(
+                'video.mp4', 
+                'topic1', 
+                120, 
+                50, 
+                'video',
+                1920,
+                1080,
+                'video/mp4'
+            );
+
+            // Check with same MIME type
+            const similar = storage.findSimilarVideoInTopic(
+                'video.mp4',
+                'video',
+                'topic1',
+                120,
+                50,
+                {
+                    checkMimeType: true
+                },
+                1920,
+                1080,
+                'video/mp4'
+            );
+
+            expect(similar).not.toBeNull();
+            expect(similar?.mimeType).toBe('video/mp4');
+        });
+
+        it('should not match videos with different MIME types', () => {
+            // Save video with MP4 MIME type
+            storage.saveProcessedVideoName(
+                'video.mp4', 
+                'topic1', 
+                120, 
+                50, 
+                'video',
+                1920,
+                1080,
+                'video/mp4'
+            );
+
+            // Check with different MIME type (MKV)
+            const similar = storage.findSimilarVideoInTopic(
+                'video.mkv',
+                'video',
+                'topic1',
+                120,
+                50,
+                {
+                    checkMimeType: true
+                },
+                1920,
+                1080,
+                'video/x-matroska'
+            );
+
+            expect(similar).toBeNull();
+        });
+
+        it('should match videos with all criteria (name, duration, size, resolution, MIME type)', () => {
+            // Save video with all metadata
+            storage.saveProcessedVideoName(
+                'complete_video.mp4', 
+                'topic1', 
+                120, 
+                50, 
+                'complete_video',
+                1920,
+                1080,
+                'video/mp4'
+            );
+
+            // Check with all criteria enabled
+            const similar = storage.findSimilarVideoInTopic(
+                'complete_video.mp4',
+                'complete_video',
+                'topic1',
+                122, // Within duration tolerance
+                51,  // Within size tolerance
+                {
+                    checkDuration: true,
+                    durationToleranceSeconds: 30,
+                    checkFileSize: true,
+                    fileSizeTolerancePercent: 5,
+                    checkResolution: true,
+                    resolutionTolerancePercent: 10,
+                    checkMimeType: true
+                },
+                1920,
+                1088, // Within resolution tolerance
+                'video/mp4'
+            );
+
+            expect(similar).not.toBeNull();
+            expect(similar?.fileName).toBe('complete_video.mp4');
+            expect(similar?.duration).toBe(120);
+            expect(similar?.sizeMB).toBe(50);
+            expect(similar?.width).toBe(1920);
+            expect(similar?.height).toBe(1080);
+            expect(similar?.mimeType).toBe('video/mp4');
+        });
     });
 
     describe('Legacy Data Migration', () => {
