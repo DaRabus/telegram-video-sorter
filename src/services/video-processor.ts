@@ -463,7 +463,7 @@ export class VideoProcessor {
             sizeMB,
             width: resolution?.width,
             height: resolution?.height,
-            mimeType: mimeType || undefined
+            mimeType: mimeType ?? undefined
         };
     }
 

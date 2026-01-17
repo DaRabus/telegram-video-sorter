@@ -91,17 +91,27 @@ export class MessageStorage {
         const tableInfo = this.db.prepare("PRAGMA table_info(processed_videos)").all() as any[];
         const columnNames = tableInfo.map(col => col.name);
         
+        const migrations: string[] = [];
+        
         if (!columnNames.includes('width')) {
-            this.db.exec('ALTER TABLE processed_videos ADD COLUMN width INTEGER');
-            console.log('   ✅ Added width column to database');
+            migrations.push('ALTER TABLE processed_videos ADD COLUMN width INTEGER');
         }
         if (!columnNames.includes('height')) {
-            this.db.exec('ALTER TABLE processed_videos ADD COLUMN height INTEGER');
-            console.log('   ✅ Added height column to database');
+            migrations.push('ALTER TABLE processed_videos ADD COLUMN height INTEGER');
         }
         if (!columnNames.includes('mime_type')) {
-            this.db.exec('ALTER TABLE processed_videos ADD COLUMN mime_type TEXT');
-            console.log('   ✅ Added mime_type column to database');
+            migrations.push('ALTER TABLE processed_videos ADD COLUMN mime_type TEXT');
+        }
+        
+        // Execute all migrations in a single transaction for atomicity
+        if (migrations.length > 0) {
+            const migrate = this.db.transaction(() => {
+                for (const migration of migrations) {
+                    this.db.exec(migration);
+                }
+            });
+            migrate();
+            console.log(`   ✅ Added ${migrations.length} new column(s) to database`);
         }
     }
 
