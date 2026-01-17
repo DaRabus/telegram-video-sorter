@@ -2,7 +2,7 @@ import {Api, TelegramClient} from 'telegram';
 import type {SortingConfig} from '../types/config';
 import {MessageStorage} from './storage';
 import {matchesVideo} from '../utils/video-matching';
-import {formatDuration, getFileName, getFileSizeMB, getVideoDuration, normalizeFileName, sleep, handleRateLimit} from '../utils/helpers';
+import {formatDuration, getFileName, getFileSizeMB, getVideoDuration, getVideoResolution, getMimeType, normalizeFileName, sleep, handleRateLimit} from '../utils/helpers';
 
 export interface VideoProcessorResult {
     processed: number;
@@ -14,6 +14,9 @@ export interface VideoMetadata {
     normalizedName: string;
     duration: number | null;
     sizeMB: number;
+    width?: number;
+    height?: number;
+    mimeType?: string;
 }
 
 export class VideoProcessor {
@@ -47,7 +50,10 @@ export class VideoProcessor {
             topicName,
             videoMeta.duration || undefined,
             videoMeta.sizeMB,
-            this.sortConfig.duplicateDetection
+            this.sortConfig.duplicateDetection,
+            videoMeta.width,
+            videoMeta.height,
+            videoMeta.mimeType
         );
 
         if (duplicates.length === 0) {
@@ -69,10 +75,11 @@ export class VideoProcessor {
         }
 
         // Find message IDs that still exist in Telegram and match our duplicates
-        // IMPROVED: Match by name AND metadata (duration/size) for precise duplicate identification
+        // IMPROVED: Match by name AND metadata (duration/size/resolution/mimeType) for precise duplicate identification
         const messageIdsToDelete: number[] = [];
         const durationTolerance = this.sortConfig.duplicateDetection?.durationToleranceSeconds || 30;
         const sizeTolerance = this.sortConfig.duplicateDetection?.fileSizeTolerancePercent || 5;
+        const resolutionTolerance = this.sortConfig.duplicateDetection?.resolutionTolerancePercent || 10;
         
         for (const message of messageMap.values()) {
             if (!('media' in message) || !message.media) continue;
@@ -84,6 +91,8 @@ export class VideoProcessor {
             const normalizedName = normalizeFileName(fileName);
             const msgDuration = getVideoDuration(media.document);
             const msgSizeMB = getFileSizeMB(media.document);
+            const msgResolution = getVideoResolution(media.document);
+            const msgMimeType = getMimeType(media.document);
 
             // Check if this message matches any of our duplicates (by name AND metadata)
             const isDuplicate = duplicates.some(d => {
@@ -101,6 +110,20 @@ export class VideoProcessor {
                     const sizeDiff = Math.abs(msgSizeMB - d.sizeMB);
                     const sizePercentDiff = (sizeDiff / Math.max(msgSizeMB, d.sizeMB)) * 100;
                     if (sizePercentDiff > sizeTolerance) return false;
+                }
+                
+                // If resolution check is enabled, verify resolution match
+                if (this.sortConfig.duplicateDetection?.checkResolution && msgResolution && d.width && d.height) {
+                    const pixels1 = msgResolution.width * msgResolution.height;
+                    const pixels2 = d.width * d.height;
+                    const pixelDiff = Math.abs(pixels1 - pixels2);
+                    const pixelPercentDiff = (pixelDiff / Math.max(pixels1, pixels2)) * 100;
+                    if (pixelPercentDiff > resolutionTolerance) return false;
+                }
+                
+                // If MIME type check is enabled, verify MIME type match
+                if (this.sortConfig.duplicateDetection?.checkMimeType && msgMimeType && d.mimeType) {
+                    if (msgMimeType.toLowerCase() !== d.mimeType.toLowerCase()) return false;
                 }
                 
                 return true;
@@ -335,7 +358,10 @@ export class VideoProcessor {
                             topic,
                             videoMeta.duration || undefined,
                             videoMeta.sizeMB,
-                            this.sortConfig.duplicateDetection
+                            this.sortConfig.duplicateDetection,
+                            videoMeta.width,
+                            videoMeta.height,
+                            videoMeta.mimeType
                         );
                         if (existing) {
                             existingTopics.push(topic);
@@ -361,7 +387,10 @@ export class VideoProcessor {
                                 topic, 
                                 videoMeta.duration ?? undefined, 
                                 videoMeta.sizeMB, 
-                                videoMeta.normalizedName
+                                videoMeta.normalizedName,
+                                videoMeta.width,
+                                videoMeta.height,
+                                videoMeta.mimeType
                             );
                         }
                         console.log(`     💾 Pre-registered video in ${newTopics.length} topic(s) to prevent race conditions`);
@@ -421,11 +450,21 @@ export class VideoProcessor {
         const duration = getVideoDuration(document);
         const fileName = getFileName(document);
         const sizeMB = getFileSizeMB(document);
+        const resolution = getVideoResolution(document);
+        const mimeType = getMimeType(document);
         const normalizedName = this.sortConfig.duplicateDetection?.normalizeFilenames !== false
             ? normalizeFileName(fileName)
             : fileName.toLowerCase();
 
-        return {fileName, normalizedName, duration, sizeMB};
+        return {
+            fileName, 
+            normalizedName, 
+            duration, 
+            sizeMB,
+            width: resolution?.width,
+            height: resolution?.height,
+            mimeType: mimeType || undefined
+        };
     }
 
     private validateVideoConstraints(videoMeta: VideoMetadata): boolean {
@@ -456,7 +495,7 @@ export class VideoProcessor {
         videoMeta: VideoMetadata,
         matchedStrings: string[]
     ): Promise<{topicsToForward: string[], deletedCount: number}> {
-        const {fileName, normalizedName, duration, sizeMB} = videoMeta;
+        const {fileName, normalizedName, duration, sizeMB, width, height, mimeType} = videoMeta;
         const topicsToForward: string[] = [];
         let deletedCount = 0;
 
@@ -467,7 +506,10 @@ export class VideoProcessor {
                 matchedString,
                 duration || undefined,
                 sizeMB,
-                this.sortConfig.duplicateDetection
+                this.sortConfig.duplicateDetection,
+                width,
+                height,
+                mimeType
             );
 
             if (similarVideo) {
@@ -477,6 +519,12 @@ export class VideoProcessor {
                 }
                 if (similarVideo.sizeMB) {
                     console.log(`        📏 Sizes: ${sizeMB.toFixed(2)} MB vs ${similarVideo.sizeMB.toFixed(2)} MB`);
+                }
+                if (width && height && similarVideo.width && similarVideo.height) {
+                    console.log(`        📺 Resolutions: ${width}x${height} vs ${similarVideo.width}x${similarVideo.height}`);
+                }
+                if (mimeType && similarVideo.mimeType) {
+                    console.log(`        🎬 MIME types: ${mimeType} vs ${similarVideo.mimeType}`);
                 }
                 
                 // Delete the duplicates and then forward the new video
@@ -502,7 +550,7 @@ export class VideoProcessor {
         videoMeta: VideoMetadata,
         matchedStrings: string[]
     ): string[] {
-        const {fileName, normalizedName, duration, sizeMB} = videoMeta;
+        const {fileName, normalizedName, duration, sizeMB, width, height, mimeType} = videoMeta;
         const topicsToForward: string[] = [];
 
         for (const matchedString of matchedStrings) {
@@ -512,7 +560,10 @@ export class VideoProcessor {
                 matchedString,
                 duration || undefined,
                 sizeMB,
-                this.sortConfig.duplicateDetection
+                this.sortConfig.duplicateDetection,
+                width,
+                height,
+                mimeType
             );
 
             if (similarVideo) {
@@ -522,6 +573,12 @@ export class VideoProcessor {
                 }
                 if (similarVideo.sizeMB) {
                     console.log(`        📏 Sizes: ${sizeMB.toFixed(2)} MB vs ${similarVideo.sizeMB.toFixed(2)} MB`);
+                }
+                if (width && height && similarVideo.width && similarVideo.height) {
+                    console.log(`        📺 Resolutions: ${width}x${height} vs ${similarVideo.width}x${similarVideo.height}`);
+                }
+                if (mimeType && similarVideo.mimeType) {
+                    console.log(`        🎬 MIME types: ${mimeType} vs ${similarVideo.mimeType}`);
                 }
             } else {
                 topicsToForward.push(matchedString);

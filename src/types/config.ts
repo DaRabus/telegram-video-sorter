@@ -18,6 +18,9 @@ export interface SortingConfig {
         checkFileSize?: boolean;
         fileSizeTolerancePercent?: number;
         normalizeFilenames?: boolean;
+        checkResolution?: boolean;
+        resolutionTolerancePercent?: number;
+        checkMimeType?: boolean;
     };
 }
 
@@ -47,8 +50,11 @@ export interface VideoDocument {
         className: string;
         duration?: number;
         fileName?: string;
+        w?: number;  // width
+        h?: number;  // height
     }[];
     size?: string;
+    mimeType?: string;
 }
 
 export interface VideoMessage {

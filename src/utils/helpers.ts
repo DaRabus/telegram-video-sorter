@@ -12,6 +12,26 @@ export function getVideoDuration(document: VideoDocument | undefined): number | 
     return videoAttr?.duration ?? null;
 }
 
+export function getVideoResolution(document: VideoDocument | undefined): { width: number; height: number } | null {
+    if (!document?.attributes) {
+        return null;
+    }
+
+    const videoAttr = document.attributes.find(
+        (attr) => attr.className === 'DocumentAttributeVideo'
+    );
+
+    if (videoAttr?.w && videoAttr?.h) {
+        return { width: videoAttr.w, height: videoAttr.h };
+    }
+
+    return null;
+}
+
+export function getMimeType(document: VideoDocument | undefined): string | null {
+    return document?.mimeType ?? null;
+}
+
 export function getFileName(document: VideoDocument | undefined): string {
     if (!document?.attributes) {
         return '';
